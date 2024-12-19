@@ -1,0 +1,18 @@
+[
+  {
+    "name": "Electronics",
+    "description": "This is electronics category."
+  },
+  {
+    "name": "Laptops",
+    "parentCategory": "6741d5f37ad98cf77cc31786"
+  },
+  {
+    "name": "Gaming Laptops",
+    "parentCategory": "66fa4ffa1698d21207291f30"
+  },
+  {
+    "name": "Dell Laptops",
+    "parentCategory": "66fa4ffa1698d21207291f30"
+  }
+]

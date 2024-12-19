@@ -1,0 +1,10 @@
+{
+  "name": "Bruce Wayne",
+  "email": "bruce2002@gmail.com",
+  "password": "Bruce2002@",
+  "passwordConfirm": "Bruce2002@",
+  "dateOfBirth": "2001-09-12",
+  "gender": "Male",
+  "phone": 9123456212,
+  "warehouse": "66f7c7f8a469bd2fc645f7c0"
+}

@@ -1,0 +1,92 @@
+[
+  {
+    "name": "Smit Prajapati",
+    "email": "smit2002@gmail.com",
+    "password": "Smit2002@",
+    "passwordConfirm": "Smit2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456788,
+    "deliveryStation": "66f7cec06f13c48c436157eb"
+  },
+  {
+    "name": "Aryan Verma",
+    "email": "aryan2002@gmail.com",
+    "password": "Aryan2002@",
+    "passwordConfirm": "Aryan2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456781,
+    "deliveryStation": "66f7ced96f13c48c436157f3"
+  },
+  {
+    "name": "Malay Chaudhary",
+    "email": "malay2002@gmail.com",
+    "password": "Malay2002@",
+    "passwordConfirm": "Malay2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456786,
+    "deliveryStation": "66f7cecf6f13c48c436157ef"
+  },
+  {
+    "name": "Jainish Patel",
+    "email": "jainish2002@gmail.com",
+    "password": "Jainish2002@",
+    "passwordConfirm": "Jainish2002@",
+    "dateOfBirth": "2002-11-03",
+    "gender": "Male",
+    "phone": 9223456786,
+    "deliveryStation": "66f7cee16f13c48c436157f7"
+  },
+  {
+    "name": "Kushal Patel",
+    "email": "kushal2002@gmail.com",
+    "password": "Kushal2002@",
+    "passwordConfirm": "Kushal2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 8223456786,
+    "deliveryStation": "66f7cee96f13c48c436157fb"
+  },
+  {
+    "name": "Henry Cavill",
+    "email": "henry2002@gmail.com",
+    "password": "Henry2002@",
+    "passwordConfirm": "Henry2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9755456786,
+    "deliveryStation": "66f7cef56f13c48c436157ff"
+  },
+  {
+    "name": "Tom Cruise",
+    "email": "tomc2002@gmail.com",
+    "password": "Tom2002@",
+    "passwordConfirm": "Tom2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9755456186,
+    "deliveryStation": "66f7cefe6f13c48c43615803"
+  },
+  {
+    "name": "Dwayne Johnson",
+    "email": "dwayne2002@gmail.com",
+    "password": "Dwayne2002@",
+    "passwordConfirm": "Dwayne2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9755456116,
+    "deliveryStation": "66f7cf086f13c48c43615807"
+  },
+  {
+    "name": "Ryan Ranolds",
+    "email": "ryan2002@gmail.com",
+    "password": "Ryan2002@",
+    "passwordConfirm": "Ryan2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9225456116,
+    "deliveryStation": "66f7cf116f13c48c4361580b"
+  }
+]

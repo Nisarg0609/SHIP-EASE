@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Sagar Patel",
+    "email": "sagar2002@gmail.com",
+    "password": "Sagar2002@",
+    "passwordConfirm": "Sagar2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456789,
+    "warehouse": "66f7c7f8a469bd2fc645f7c0"
+  },
+  {
+    "name": "Kalpit Patel",
+    "email": "kalpit2002@gmail.com",
+    "password": "Kalpit2002@",
+    "passwordConfirm": "Kalpit2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456787,
+    "warehouse": "66f7c7dda469bd2fc645f7b8"
+  },
+  {
+    "name": "Devid Patel",
+    "email": "devid2002@gmail.com",
+    "password": "Devid2002@",
+    "passwordConfirm": "Devid2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456783,
+    "warehouse": "66f7c7eda469bd2fc645f7bc"
+  }
+]

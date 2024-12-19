@@ -1,0 +1,4349 @@
+----------------------------------------------------------------------------------------------------
+-> address
+
+import Address from "../models/address.model.js";
+import City from "../models/city.model.js";
+import catchAsync from "../utils/catchAsync.js";
+import { filterObject } from "../utils/helper.js";
+import { createOne, getById, getByIdAndUpdate, getMany } from "./factoryHandler.js";
+
+const getAddresses = getMany(Address, { path: "city", select: "city state country" });
+const getAddress = getById(Address, { path: "city", select: "city state country" });
+
+const updateAddress = catchAsync(async (req, res, next) => {
+  const { addId } = req.params;
+  const filteredBody = filterObject(req.body, ["street", "city", "postalCode"]);
+  const address = await Address.findByIdAndUpdate(addId, filteredBody, { new: true });
+  req.body.address = address._id;
+  next();
+});
+
+const createAddress = catchAsync(async (req, res, next) => {
+  const { street, city, postalCode, isPrimary = false } = req.params;
+  const cityExists = await City.findById(city);
+  if (!cityExists)
+    return next(new AppError("City does not exists, Please select another city.", 400));
+
+  const address = await Address.create({ street, city, postalCode, isPrimary });
+  req.body.address = address._id;
+  next();
+});
+
+const updateDefaultAddress = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const addressExists = await Address.findById(id);
+  if (!addressExists) return next(new AppError("No address found", 404));
+
+  await Address.updateMany({ isPrimary: true }, { $set: { isPrimary: false } });
+  const updatedAddress = await Address.findByIdAndUpdate(id, { isPrimary: true });
+  res.status(200).json({
+    status: "success",
+    data: {
+      updatedAddress,
+    },
+  });
+});
+
+export { getAddresses, getAddress, createAddress, updateAddress, updateDefaultAddress };
+
+import mongoose from "mongoose";
+
+const addressSchema = new mongoose.Schema(
+  {
+    street: {
+      type: String,
+      required: [true, "Street address is required"],
+      trim: true,
+      minlength: [2, "Street address must be at least 2 characters long"],
+      maxlength: [200, "Street address cannot exceed 200 characters"],
+    },
+    city: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "City",
+      required: [true, "City is required"],
+    },
+    postalCode: {
+      type: String,
+      required: [true, "Postal code is required"],
+      trim: true,
+      match: [/^\d{6}$/, "Postal code must be a 6-digit number"],
+    },
+    isPrimary: {
+      type: Boolean,
+      default: false,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+const Address = mongoose.model("Address", addressSchema);
+export default Address;
+
+
+import express from "express";
+import {
+  createAddress,
+  getAddress,
+  getAddresses,
+  updateAddress,
+  updateDefaultAddress,
+} from "../controllers/address.controller.js";
+
+const router = express.Router();
+router.route("/").get(getAddresses);
+router.route("/:id").get(getAddress).patch(updateAddress);
+router.route("/:id/default").patch(updateDefaultAddress);
+
+export default router;
+
+
+----------------------------------------------------------------------------------------------------
+-> auth
+
+import jwt from "jsonwebtoken";
+import User from "../models/user.model.js";
+import AppError from "../utils/AppError.js";
+import catchAsync from "../utils/catchAsync.js";
+import { filterObject } from "../utils/helper.js";
+
+const signToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET_KEY, {
+    expiresIn: process.env.JWT_EXPIRES_IN,
+  });
+};
+
+const signUp = catchAsync(async (req, res, next) => {
+  const allowedFields = [
+    "name",
+    "email",
+    "password",
+    "passwordConfirm",
+    "gender",
+    "dateOfBirth",
+    "gender",
+    "phone",
+    "address",
+    "warehouseId",
+    "deliveryStationId",
+    "driverLicenseNumber",
+  ];
+
+  // 1. check if user is already exists
+  const userExists = await User.findOne({ email: req.body.email });
+  if (userExists) return next(new AppError("User already exists", 400));
+
+  // 2. create new user
+  const filteredBody = filterObject(req.body, allowedFields);
+  const user = await User.create(filteredBody);
+
+  // 3. create token
+  const token = signToken(user._id);
+
+  // 4. send response with token
+  res.status(200).json({
+    status: "success",
+    user,
+    token,
+  });
+});
+
+const login = catchAsync(async (req, res, next) => {
+  const { email, password } = req.body;
+
+  // 1. check email and password is present
+  if (!email || !password)
+    return next(new AppError("Please provide email and password.", 400));
+
+  // 2. check if creadentials are correct
+  const user = await User.findOne({ email }).select("+password");
+  if (!user || !(await user.comparePasswords(password, user.password)))
+    return next(new AppError("Invalid credentials.", 400));
+
+  // 3. create token
+  const token = signToken(user._id);
+
+  // 4. send response with token
+  res.status(200).json({
+    status: "success",
+    token,
+  });
+});
+
+const protect = catchAsync(async (req, res, next) => {
+  let token;
+  // 1. check if token available
+  if (req.headers.authorization?.startsWith("Bearer")) {
+    token = req.headers.authorization.split(" ")[1];
+  }
+  if (!token)
+    return next(new AppError("You are not logged in. Please login to get access.", 400));
+
+  // 2. token verification
+  const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
+  if (!decoded) return next(new AppError("Invalid token or token has been expired", 400));
+
+  // 3. chekc user still exists in database
+  const freshUser = await User.findById(decoded.id);
+  if (!freshUser)
+    return next(new AppError("User belonging to this token does no longer exists.", 400));
+
+  // 4. check if user has changed password after token was assigned
+  if (freshUser.changedPasswordAfter(decoded.iat))
+    return next(new AppError("User recently changed password. Please login again.", 400));
+
+  // grant access to user
+  req.user = freshUser;
+  next();
+});
+
+const restrictTo = (...roles) => {
+  return (req, res, next) => {
+    if (!roles.includes(req.user.role))
+      return next(
+        new AppError("You do not have permission to access this resource.", 400)
+      );
+    next();
+  };
+};
+
+export { signUp, login, protect, restrictTo };
+
+
+import express from "express";
+import { login, signUp } from "../controllers/auth.controller.js";
+
+const router = express.Router();
+router.route("/signUp").post(signUp);
+router.route("/login").post(login);
+
+export default router;
+
+----------------------------------------------------------------------------------------------------
+-> cart
+
+
+import Cart from "../models/cart.model.js";
+import Product from "../models/product.model.js";
+import AppError from "../utils/AppError.js";
+import catchAsync from "../utils/catchAsync.js";
+import { sendResponse } from "./factoryHandler.js";
+
+const validateCartRequest = catchAsync(async (req, res, next) => {
+  const { productId, variantSku, variantStock } = req.body;
+
+  const urlParts = req.originalUrl.split("/");
+  const action = urlParts[urlParts.length - 1];
+  if (action === "update") {
+    if (!variantStock || variantStock < 0)
+      return next(
+        new AppError("Please provide variant stock which should be positive.", 400)
+      );
+  }
+  if (!productId || !variantSku)
+    return next(new AppError("Please provide product id and variant sku", 400));
+
+  const productExists = await Product.findById(productId);
+  if (!productExists)
+    return next(new AppError(`No product found with id ${productId}`, 404));
+  const variantExists = await Product.findOne({
+    _id: productId,
+    "variants.sku": variantSku,
+  });
+  if (!variantExists)
+    return next(new AppError(`No variant found with variant sku : ${variantSku}`, 404));
+
+  next();
+});
+
+const addItemToCart = catchAsync(async (req, res, next) => {
+  const { productId, variantSku } = req.body;
+
+  const cart = await Cart.findOne({ user: req.user._id });
+  if (!cart) {
+    const cart = await Cart.create({ user: req.user._id, items: [] });
+    cart.items.push({
+      product: productId,
+      variants: [{ variantSku, variantStock: 1 }],
+    });
+    await cart.save();
+    sendResponse(res, cart);
+  } else {
+    const productIndex = cart.items.findIndex((item) => item.product.equals(productId));
+    if (productIndex === -1) {
+      cart.items.push({
+        product: productId,
+        variants: [{ variantSku, variantStock: 1 }],
+      });
+      await cart.save();
+    } else {
+      const variantIndex = cart.items[productIndex].variants.findIndex(
+        (variant) => variant.variantSku === variantSku
+      );
+      if (variantIndex === -1) {
+        cart.items[productIndex].variants.push({
+          variantSku,
+          variantStock: 1,
+        });
+        await cart.save();
+      } else {
+        return next(new AppError("Product Variant already exists in cart", 400));
+      }
+    }
+    sendResponse(res, cart);
+  }
+});
+
+const removeItemFromCart = catchAsync(async (req, res, next) => {
+  const { productId, variantSku } = req.body;
+
+  const cart = await Cart.findOne({ user: req.user._id });
+  if (!cart) return next(new AppError("Cart not found", 400));
+
+  const productIndex = cart.items.findIndex((item) => item.product.equals(productId));
+  if (productIndex === -1)
+    return next(new AppError("Product is not present in cart.", 400));
+
+  const variantIndex = cart.items[productIndex].variants.findIndex(
+    (variant) => variant.variantSku === variantSku
+  );
+  if (variantIndex === -1)
+    return next(new AppError("Product Variant is not present in cart.", 400));
+
+  if (cart.items[productIndex].variants.length === 1) {
+    // remove product from cart
+    cart.items.splice(productIndex, 1);
+  } else {
+    // remove variant from product
+    cart.items[productIndex].variants.splice(variantIndex, 1);
+  }
+  await cart.save();
+
+  sendResponse(res, cart);
+});
+
+const updateCart = catchAsync(async (req, res, next) => {
+  const { productId, variantSku, variantStock } = req.body;
+
+  const cart = await Cart.findOne({ user: req.user._id });
+  if (!cart) return next(new AppError("Cart does not exist.", 400));
+
+  const productIndex = cart.items.findIndex((item) => item.product.equals(productId));
+  if (productIndex === -1)
+    return next(new AppError("Product is not present in cart.", 400));
+
+  const variantIndex = cart.items[productIndex].variants.findIndex(
+    (variant) => variant.variantSku === variantSku
+  );
+  if (variantIndex === -1)
+    return next(new AppError("Product Variant is not present in cart.", 400));
+
+  const product = await Product.findById(productId);
+  if (product.maxPurchaseQuantity < variantStock)
+    return next(
+      new AppError(
+        `You can add upto ${product.maxPurchaseQuantity} quantity of this product.`,
+        400
+      )
+    );
+
+  if (variantStock === 0) {
+    // remove product from cart
+    cart.items.splice(productIndex, 1);
+  } else {
+    cart.items[productIndex].variants[variantIndex].variantStock = variantStock;
+  }
+  await cart.save();
+  sendResponse(res, cart);
+});
+
+const getCart = catchAsync(async (req, res, next) => {
+  const cart = await Cart.findOne({ user: req.user._id }).populate("items.product");
+  if (!cart || cart.items.length === 0) return next(new AppError("Cart is Empty.", 404));
+
+  cart.items.map((item) => {
+    const product = item.product;
+    product.variants = product.variants.filter((variant) =>
+      item.variants.some((wishlistVariant) => wishlistVariant.variantSku === variant.sku)
+    );
+  });
+
+  sendResponse(res, cart);
+});
+
+export { validateCartRequest, addItemToCart, removeItemFromCart, updateCart, getCart };
+
+
+import mongoose from "mongoose";
+
+const cartSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: [true, "User is required to add cart"],
+  },
+  items: {
+    type: [
+      {
+        product: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Product",
+          required: [true, "Product is required to add cart"],
+        },
+        variants: [
+          {
+            variantSku: {
+              type: String,
+              required: [true, "Variant sku is required to add cart"],
+            },
+            variantStock: {
+              type: Number,
+              required: [true, "Variant stock is required to add cart"],
+            },
+          },
+        ],
+      },
+    ],
+  },
+});
+
+const Cart = mongoose.model("Cart", cartSchema);
+export default Cart;
+
+
+import express from "express";
+import {
+  addItemToCart,
+  getCart,
+  removeItemFromCart,
+  updateCart,
+  validateCartRequest,
+} from "../controllers/cart.controller.js";
+import { protect } from "../controllers/auth.controller.js";
+
+const router = express.Router();
+router.route("/").get(protect, getCart);
+router.route("/add").patch(protect, validateCartRequest, addItemToCart);
+router.route("/remove").patch(protect, validateCartRequest, removeItemFromCart);
+router.route("/update").patch(protect, validateCartRequest, updateCart);
+
+export default router;
+
+----------------------------------------------------------------------------------------------------
+-> city
+
+import City from "../models/city.model.js";
+import AppError from "../utils/AppError.js";
+import catchAsync from "../utils/catchAsync.js";
+import {
+  createMany,
+  createOne,
+  getById,
+  getMany,
+  sendResponse,
+  updateOne,
+} from "./factoryHandler.js";
+
+const createCity = createOne(City, ["city", "state", "country"]);
+const createCities = createMany(City, ["city", "state", "country"]);
+const getCities = getMany(City);
+const getCity = getById(City);
+const updateCity = updateOne(City, ["city", "state", "country", "isActive"]);
+
+const addPincodes = catchAsync(async (req, res, next) => {
+  const { pincodes } = req.body;
+  if (!pincodes || !Array.isArray(pincodes) || pincodes?.length === 0)
+    return next(new AppError("Please provide valid pincodes array", 400));
+
+  const invalidPincodes = pincodes.filter((pincode) => !/^[0-9]{6}$/.test(pincode));
+  if (invalidPincodes.length > 0) {
+    return next(new AppError("All pincodes must be 6-digit numbers", 400));
+  }
+
+  const city = await City.findByIdAndUpdate(
+    req.params.id,
+    {
+      $addToSet: { pincodes: { $each: pincodes } },
+    },
+    { new: true, runValidators: true }
+  );
+  if (!city) return next(new AppError("city no found", 404));
+
+  sendResponse(res, city);
+});
+
+export { createCity, createCities, getCities, getCity, updateCity, addPincodes };
+
+
+import mongoose from "mongoose";
+import { capitalizeFirstLetter, removeSpace } from "../utils/helper.js";
+
+const citySchema = new mongoose.Schema(
+  {
+    city: {
+      type: String,
+      required: [true, "City is required!"],
+      unique: true,
+      trim: true,
+      minlength: [2, "City must be at least 2 characters long."],
+      maxlength: [50, "City cannot exceed 50 characters"],
+      match: [/^[A-Za-z\s]+$/, "City should only contain letters"],
+    },
+    state: {
+      type: String,
+      trim: true,
+      minlength: [2, "State must be at least 2 characters long"],
+      maxlength: [50, "State cannot exceed 50 characters"],
+      match: [/^[A-Za-z\s]+$/, "State should only contain letters"],
+      default: "Gujarat",
+    },
+    country: {
+      type: String,
+      trim: true,
+      minlength: [2, "State must be at least 2 characters long"],
+      maxlength: [50, "State cannot exceed 50 characters"],
+      match: [/^[A-Za-z\s]+$/, "State should only contain letters"],
+      default: "India",
+    },
+    pincodes: {
+      type: [String],
+      validate: [
+        {
+          validator: function (pincodes) {
+            return new Set(pincodes).size === pincodes.length;
+          },
+          message: "Pincode values must be unique.",
+        },
+        {
+          validator: function (pincodes) {
+            return pincodes.every((pincode) => /^[0-9]{6}$/.test(pincode));
+          },
+          message: "Invalid Pincode format in the list.",
+        },
+      ],
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+// capitalize the first letter and remove extra spaces
+citySchema.pre("save", function (next) {
+  const fieldsToUpdate = ["city", "state", "country"];
+  fieldsToUpdate.map((field) => {
+    if (this[field]) {
+      this[field] = capitalizeFirstLetter(this[field]);
+      this[field] = removeSpace(this[field]);
+    }
+  });
+  next();
+});
+
+const City = mongoose.model("City", citySchema);
+export default City;
+
+
+
+import express from "express";
+import {
+  addPincodes,
+  createCities,
+  createCity,
+  getCities,
+  getCity,
+  updateCity,
+} from "../controllers/city.controller.js";
+
+const router = express.Router();
+router.route("/").get(getCities).post(createCity);
+router.route("/:id").get(getCity).patch(updateCity);
+router.route("/create-many-cities").post(createCities);
+router.route("/:id/pincodes").patch(addPincodes);
+
+export default router;
+
+----------------------------------------------------------------------------------------------------
+-> delivery station
+
+import DeliveryStation from "../models/deliveryStation.model.js";
+import { createOne, getById, getByIdAndUpdate, getMany } from "./factoryHandler.js";
+
+const createDeliveryStation = createOne(DeliveryStation, ["name", "address", "location"]);
+const getDeliveryStations = getMany(DeliveryStation, {
+  path: "address",
+  select: "street city postalCode",
+  populate: { path: "city", select: "city state country" },
+});
+const getDeliveryStation = getById(DeliveryStation, {
+  path: "address",
+  select: "street city postalCode",
+  populate: { path: "city", select: "city state country" },
+});
+const updateDeliveryStation = getByIdAndUpdate(DeliveryStation, [
+  "name",
+  "address",
+  "location",
+  "isActive",
+]);
+
+export {
+  createDeliveryStation,
+  getDeliveryStations,
+  getDeliveryStation,
+  updateDeliveryStation,
+};
+
+
+
+import mongoose from "mongoose";
+
+const deliveryStationSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      unique: true,
+      required: [true, "Delivery Station name is required"],
+      trim: true,
+      minlength: [2, "Delivery Station name must be at least 2 characters long."],
+      maxlength: [100, "Delivery Station name cannot exceed 100 characters"],
+      match: [
+        /^[a-zA-Z0-9_ ]+$/,
+        "Delivery Station name should only contain letters, numbers, and spaces",
+      ],
+    },
+    address: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Address",
+      required: [true, "Delivery Station address is required"],
+    },
+    location: {
+      type: {
+        type: String,
+        enum: ["Point"],
+        required: [true, "Coordinates type is required"],
+      },
+      coordinates: {
+        type: [Number],
+        required: [true, "Coordinates are required"],
+        validate: {
+          validator: function (value) {
+            return (
+              value.length === 2 &&
+              value[0] >= -180 &&
+              value[0] <= 180 &&
+              value[1] >= -90 &&
+              value[1] <= 90
+            );
+          },
+          message: "Invalid coordinates format",
+        },
+      },
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+const DeliveryStation = mongoose.model("DeliveryStation", deliveryStationSchema);
+export default DeliveryStation;
+
+
+
+import express from "express";
+import {
+  createDeliveryStation,
+  getDeliveryStation,
+  getDeliveryStations,
+  updateDeliveryStation,
+} from "../controllers/deliveryStation.controller.js";
+import { createAddress, updateAddress } from "../controllers/address.controller.js";
+
+const router = express.Router();
+router.route("/").get(getDeliveryStations).post(createAddress, createDeliveryStation);
+router.route("/:id").get(getDeliveryStation).patch(updateDeliveryStation);
+router.route("/:id/address/:addId").patch(updateAddress, updateDeliveryStation);
+
+export default router;
+
+----------------------------------------------------------------------------------------------------
+-> error
+
+import AppError from "../utils/AppError.js";
+
+const sendErrorDev = (err, res) => {
+  res.status(err.statusCode).json({
+    status: err.status,
+    message: err.message,
+    error: err,
+    stack: err.stack,
+  });
+};
+
+const sendErrorProd = (err, res) => {
+  if (err.isOperational) {
+    res.status(err.statusCode).json({
+      status: err.status,
+      message: err.message,
+    });
+  } else {
+    res.status(err.statusCode).json({
+      status: "error",
+      message: "Something went wrong",
+    });
+  }
+};
+
+const handleDuplicateFieldsDB = (err) => {
+  const regex = /index: (\w+)_\d+ dup key: { (\w+): "([^"]+)" }/;
+  const match = err.errorResponse.errmsg.match(regex);
+  const message = `Duplicate field ${match[2]}: ${match[3]}. Please use another value`;
+  return new AppError(message, 400);
+};
+
+const handleJWTError = () => new AppError("Invalid Token. Please login again.", 400);
+
+const handleTokenExpiredError = () => new AppError("Your token has expired. Please login again.", 400);
+
+const globalErrorHandler = (err, req, res, next) => {
+  console.log(err);
+  err.statusCode = err.statusCode || 500;
+  err.status = err.status || "error";
+  if (process.env.NODE_ENV === "development") {
+    sendErrorDev(err, res);
+  } else if (process.env.NODE_ENV === "production") {
+    let error = { ...err };
+    if (error.code === 11000) error = handleDuplicateFieldsDB(error);
+    if (error.name === "JsonWebTokenError") error = handleJWTError(error);
+    if (error.name === "TokenExpiredError") error = handleTokenExpiredError(error);
+    sendErrorProd(error, res);
+  }
+};
+
+export default globalErrorHandler;
+
+----------------------------------------------------------------------------------------------------
+-> factory handler
+
+import APIFeatures from "../utils/apiFeatures.js";
+import AppError from "../utils/AppError.js";
+import catchAsync from "../utils/catchAsync.js";
+import { filterObject } from "../utils/helper.js";
+
+const sendResponse = (res, data) => {
+  let numOfDocs = 1;
+  if (Array.isArray(data)) {
+    numOfDocs = data.length;
+  }
+  res.status(200).json({
+    status: "success",
+    "result(s)": numOfDocs,
+    data: {
+      data,
+    },
+  });
+};
+
+const populateQuery = (query, populateOptions) => {
+  if (Array.isArray(populateOptions) && populateOptions.length > 0) {
+    populateOptions.forEach((option) => {
+      if (Object.keys(option).length > 0) query = query.populate(option);
+    });
+  } else {
+    query = query.populate(populateOptions);
+  }
+  return query;
+};
+
+// CREATE MANY - not recommended
+const createMany = (Model, allowedFields) =>
+  catchAsync(async (req, res, next) => {
+    const list = req.body;
+    if (!Array.isArray(list) || list.length === 0)
+      return next(new AppError("Request body must be non-empty array.", 400));
+
+    const filteredList = [];
+    list.forEach((item) => {
+      filteredList.push(filterObject(item, allowedFields));
+    });
+
+    const docs = await Model.insertMany(filteredList);
+    sendResponse(res, docs);
+  });
+
+// CREATE ONE
+const createOne = (Model, allowedFields) =>
+  catchAsync(async (req, res, next) => {
+    const filteredBody = filterObject(req.body, allowedFields);
+    const doc = await Model.create(filteredBody);
+    sendResponse(res, doc);
+  });
+
+// GET Many
+const getMany = (Model, populateOptions, queryOptions = {}, projectionOptions = {}) =>
+  catchAsync(async (req, res, next) => {
+    // query and projection
+    let query = Model.find(queryOptions, projectionOptions);
+
+    // populate
+    if (populateOptions) query = populateQuery(query, populateOptions);
+
+    // filter, sort, fields, paginate
+    let features = new APIFeatures(query, req.query)
+      .filter()
+      .sort()
+      .limitFields()
+      .paginate();
+
+    const docs = await features.query;
+    if (docs.length === 0) return next(new AppError(`Documents not found`, 404));
+    sendResponse(res, docs);
+  });
+
+// GET ONE
+// const getOne = (Model, populateOptions, queryOptions = {}, projectionOptions = {}) =>
+//   catchAsync(async (req, res, next) => {
+//     // query and projection
+//     let query = Model.findOne(queryOptions, projectionOptions);
+
+//     // populate
+//     if (populateOptions) query = populateQuery(query, populateOptions);
+
+//     const doc = await query;
+//     if (!doc) return next(new AppError(`Document not found`, 404));
+//     sendResponse(res, doc);
+//   });
+
+// GET BY ID
+const getById = (Model, populateOptions, projectionOptions = {}) =>
+  catchAsync(async (req, res, next) => {
+    // query and projection
+    let query = Model.findById(req.params.id, projectionOptions);
+
+    // populate
+    if (populateOptions) query = populateQuery(query, populateOptions);
+
+    const doc = await query;
+    if (!doc) return next(new AppError(`Document not found`, 404));
+    sendResponse(res, doc);
+  });
+
+// GET BY ID AND UPDATE
+const getByIdAndUpdate = (Model, allowedFields) =>
+  catchAsync(async (req, res, next) => {
+    const filteredBody = filterObject(req.body, allowedFields);
+    const updatedDoc = await Model.findByIdAndUpdate(req.params.id, filteredBody, {
+      new: true,
+      runValidators: true,
+    });
+    if (!updatedDoc)
+      return next(new AppError(`No document found with id : ${req.params.id}`, 404));
+    sendResponse(res, updatedDoc);
+  });
+
+// UPDATE ONE
+const updateOne = (Model, allowedFields) =>
+  catchAsync(async (req, res, next) => {
+    const docId = req.params.id;
+    const document = await Model.findById(docId);
+    if (!document) {
+      return next(new AppError(`No document found with id: ${docId}`, 404));
+    }
+
+    const filteredBody = filterObject(req.body, allowedFields);
+    Object.keys(filteredBody).forEach((key) => {
+      document[key] = filteredBody[key];
+    });
+    const updatedDocument = await document.save();
+    sendResponse(res, updatedDocument);
+  });
+export {
+  createOne,
+  createMany,
+  getMany,
+  getById,
+  updateOne,
+  getByIdAndUpdate,
+  sendResponse,
+};
+
+----------------------------------------------------------------------------------------------------
+-> order
+
+import mongoose from "mongoose";
+import Cart from "../models/cart.model.js";
+import City from "../models/city.model.js";
+import User from "../models/user.model.js";
+import Warehouse from "../models/warehouse.model.js";
+import AppError from "../utils/AppError.js";
+import catchAsync from "../utils/catchAsync.js";
+import { getMany, sendResponse } from "./factoryHandler.js";
+import Order from "../models/order.model.js";
+import DeliveryStation from "../models/deliveryStation.model.js";
+import Vehicle from "../models/vehicle.model.js";
+import Product from "../models/product.model.js";
+
+const isStockAvailableInWarehouse = catchAsync(async (req, res, next) => {
+  const { postalCode, addressId } = req.body;
+  let pincode;
+  let address;
+  let user;
+  if (!postalCode) {
+    if (!addressId) {
+      return next(new AppError("Please provide addressId or postalCode", 400));
+    }
+    user = await User.findById(req.user._id).populate("address");
+
+    address = user.address.filter((add) => add._id.equals(addressId))[0];
+    if (!address)
+      return next(new AppError("Please provide valid addressId or postalCode.", 400));
+    pincode = address.postalCode;
+  } else {
+    pincode = postalCode;
+  }
+
+  const city = await City.findOne({ pincodes: pincode });
+  if (!city) return next(new AppError("Not Deliverable", 404));
+
+  const warehouse = await Warehouse.findOne({ transportCities: city._id });
+  if (!warehouse) return next(new AppError("Not Deliverable", 404));
+
+  const cart = await Cart.findOne({ user: req.user._id }).populate(
+    "items.product",
+    "name"
+  );
+  if (!cart || cart.items.length === 0) return next(new AppError("Cart is empty", 404));
+
+  // Check stock for each item in the cart
+  for (const cartItem of cart.items) {
+    const productInWarehouse = warehouse.products.find((warehouseProduct) =>
+      warehouseProduct.product.equals(cartItem.product._id)
+    );
+
+    if (!productInWarehouse)
+      return next(
+        new AppError(
+          `Product ${cartItem.product.name} is not available in the warehouse`,
+          404
+        )
+      );
+
+    // Check each variant stock in the warehouse against required stock in the cart
+    for (const cartVariant of cartItem.variants) {
+      const variantInWarehouse = productInWarehouse.variants.find(
+        (warehouseVariant) => warehouseVariant.sku === cartVariant.variantSku
+      );
+
+      if (!variantInWarehouse)
+        return next(
+          new AppError(
+            `Variant SKU ${cartVariant.variantSku} of product ${cartItem.product.name} is not in the warehouse`,
+            404
+          )
+        );
+      if (variantInWarehouse.stock < cartVariant.variantStock) {
+        return next(
+          new AppError(
+            `Insufficient stock for SKU ${cartVariant.variantSku} of product ${cartItem.product.name}. Available Stock: ${variantInWarehouse.stock}`,
+            404
+          )
+        );
+      }
+    }
+  }
+  req.body.warehouse = warehouse;
+  req.body.address = address;
+  req.body.city = city;
+  req.body.cart = cart;
+  req.body.user = user;
+  next();
+});
+
+const checkProductAvailability = (req, res, next) => {
+  sendResponse(res, true);
+};
+
+const placeOrder = catchAsync(async (req, res, next) => {
+  const { user, address, city, warehouse } = req.body;
+
+  const cart = await Cart.findOne({ user: user._id }).populate("items.product");
+  const deliveryStation = await DeliveryStation.findOne().populate({
+    path: "address",
+    match: { city: city._id },
+    select: "city street postalCode",
+  });
+
+  const items = [];
+  let totalAmount = 0;
+  let totalWeight = 0;
+  let totalVolume = { length: 0, width: 0, height: 0 };
+
+  for (let item of cart.items) {
+    const { product, variants } = item;
+
+    const warehouseProduct = await Warehouse.findOne({
+      _id: warehouse._id,
+      "products.product": product._id,
+    });
+    if (!warehouseProduct) {
+      throw new Error(
+        `Product ${product.name} is unavailable in the selected warehouse.`
+      );
+    }
+
+    for (let variant of variants) {
+      const warehouseVariant = warehouseProduct.products
+        .find((p) => p.product.equals(product._id))
+        .variants.find((v) => v.sku === variant.variantSku);
+
+      if (!warehouseVariant || warehouseVariant.stock < variant.variantStock) {
+        throw new Error(`Insufficient stock for ${product.name} - ${variant.variantSku}`);
+      }
+
+      const productVariant = product.variants.find((v) => v.sku === variant.variantSku);
+      if (!productVariant) {
+        throw new Error(
+          `Variant SKU ${variant.variantSku} not found for product ${product.name}`
+        );
+      }
+
+      const price = productVariant.price;
+      const discount = productVariant.discount || 0;
+      const totalPrice = variant.variantStock * price * (1 - discount / 100);
+
+      totalWeight += product.weight * variant.variantStock;
+      totalVolume.length += product.dimensions.length * variant.variantStock;
+      totalVolume.width += product.dimensions.width * variant.variantStock;
+      totalVolume.height += product.dimensions.height * variant.variantStock;
+      totalAmount += totalPrice;
+
+      items.push({
+        product: product._id,
+        variant: variant.variantSku,
+        quantity: variant.variantStock,
+        price,
+        discount,
+        totalPrice,
+      });
+    }
+  }
+
+  const order = new Order({
+    customer: user._id,
+    items,
+    deliveryCost: 40,
+    totalAmount: totalAmount + 40,
+    shippingAddress: address._id,
+    deliveryStation: deliveryStation._id,
+    warehouse: warehouse._id,
+    totalWeight,
+    totalVolume,
+  });
+  await order.save();
+
+  for (let item of cart.items) {
+    for (let variant of item.variants) {
+      await Warehouse.updateOne(
+        {
+          _id: warehouse._id,
+          "products.product": item.product._id,
+          "products.variants.sku": variant.variantSku,
+        },
+        {
+          $inc: {
+            "products.$[product].variants.$[variant].stock": -variant.variantStock,
+          },
+        },
+        {
+          arrayFilters: [
+            { "product.product": item.product._id },
+            { "variant.sku": variant.variantSku },
+          ],
+        }
+      );
+    }
+  }
+
+  await Cart.deleteOne({ user: user._id });
+  sendResponse(res, order);
+});
+
+const getOrdersForManager = catchAsync(async (req, res, next) => {
+  const user = req.user;
+  let orders;
+  if (user.role === "warehouseManager") {
+    orders = await Order.find({
+      warehouse: user.warehouse,
+      assignmentStatus: "Not Assigned",
+    });
+  } else if (user.role === "deliveryStationManager") {
+    orders = await Order.find({
+      deliveryStation: user.deliveryStation,
+      assignmentStatus: "Delivered to Delivery Station",
+    });
+  }
+  if (!orders.length) return next(new AppError("Orders not Found", 404));
+  sendResponse(res, orders);
+});
+
+const assignOrdersToWarehouseDriver = catchAsync(async (req, res, next) => {
+  const { orders, vehicleId, driverId } = req.body;
+  const warehouse = req.user.warehouse;
+
+  // validate vehicle
+  const vehicle = await Vehicle.findOne({ _id: vehicleId, warehouse });
+  if (!vehicle)
+    return next(
+      new AppError("Vehicle not found. Please provide vehicle of your warehouse", 404)
+    );
+  if (!vehicle.isAvailable) return next(new AppError("Vehicle is not available", 400));
+
+  // validate driver
+  const driver = await User.findOne({
+    _id: driverId,
+    warehouse,
+    role: "warehouseDriver",
+  });
+  if (!driver)
+    return next(
+      new AppError("Driver not found. Please provide driver of your warehouse", 404)
+    );
+  if (!driver.isDriverAvailable)
+    return next(new AppError("Driver is not available", 400));
+
+  // validate orders
+  if (!Array.isArray(orders) || orders.length === 0)
+    return next(new AppError("Please provide valid orders array.", 400));
+
+  const assignedOrders = await Promise.all(
+    orders.map(async (order) => {
+      const ord = await Order.findOne({
+        _id: order,
+        warehouse,
+        assignmentStatus: "Not Assigned",
+      });
+      if (!ord)
+        return next(
+          new AppError(
+            `Order with id ${order} not found Or has been already assigned.`,
+            400
+          )
+        );
+      return ord;
+    })
+  );
+  if (assignedOrders.length !== orders.length)
+    return next(
+      new AppError(`Some orders are not found Or has been already assigned.`, 400)
+    );
+
+  let totalWeightOfOrders = 0;
+  let totalVolumeOfOrders = { length: 0, width: 0, height: 0 };
+
+  // validate vehicle weight capacity
+  assignedOrders.map((order) => {
+    totalWeightOfOrders += order.totalWeight;
+    totalVolumeOfOrders.length += order.totalVolume.length;
+    totalVolumeOfOrders.width += order.totalVolume.width;
+    totalVolumeOfOrders.height += order.totalVolume.height;
+  });
+  if (totalWeightOfOrders > vehicle.weightCapacity)
+    return next(
+      new AppError(
+        `Total weight of Orders (${totalWeightOfOrders} kg) exceeds vehicle weight capacity of ${vehicle.weightCapacity} kg`,
+        400
+      )
+    );
+
+  // validate vehicle dimension capacity
+  const ordersVolume =
+    totalVolumeOfOrders.length * totalVolumeOfOrders.width * totalVolumeOfOrders.height;
+  const vehicleVolume =
+    vehicle.dimensions.length * vehicle.dimensions.width * vehicle.dimensions.height;
+  if (ordersVolume > vehicleVolume)
+    return next(
+      new AppError("Total volume of Orders exceed vehicle volume capacity", 400)
+    );
+
+  const updatedOrders = await Promise.all(
+    orders.map(
+      async (order) =>
+        await Order.findByIdAndUpdate(order, {
+          orderStatus: "Shipped",
+          assignmentStatus: "Assigned to Warehouse Driver",
+          warehouseDriver: driverId,
+          vehicle: vehicleId,
+          assignedToWarehouseDriverAt: Date.now(),
+        })
+    )
+  );
+
+  await User.findByIdAndUpdate(driverId, { isDriverAvailable: false });
+  await Vehicle.findByIdAndUpdate(vehicleId, { isAvailable: false });
+
+  sendResponse(res, updatedOrders);
+});
+
+const assignOrdersToDeliveryStationDriver = catchAsync(async (req, res, next) => {
+  const { orders, driverId } = req.body;
+  const deliveryStation = req.user.deliveryStation;
+
+  // validate driver
+  const driver = await User.findOne({
+    _id: driverId,
+    deliveryStation,
+    role: "deliveryStationDriver",
+  });
+  if (!driver)
+    return next(
+      new AppError("Driver not found. Please provide driver of your warehouse", 404)
+    );
+  if (!driver.isDriverAvailable)
+    return next(new AppError("Driver is not available", 400));
+
+  // validate orders
+  if (!Array.isArray(orders) || orders.length === 0)
+    return next(new AppError("Please provide valid orders array.", 400));
+  if (orders.length > 50)
+    return next(new AppError("You can assign up to 50 orders per driver.", 400));
+
+  const assignedOrders = await Promise.all(
+    orders.map(async (order) => {
+      const ord = await Order.findOne({
+        _id: order,
+        deliveryStation,
+        assignmentStatus: "Delivered to Delivery Station",
+      });
+      if (!ord)
+        return next(
+          new AppError(
+            `Order with id ${order} not found Or has been already assigned.`,
+            400
+          )
+        );
+      return ord;
+    })
+  );
+  if (assignedOrders.length !== orders.length)
+    return next(
+      new AppError(`Some orders are not found Or has been already assigned.`, 400)
+    );
+
+  const updatedOrders = await Promise.all(
+    orders.map(
+      async (order) =>
+        await Order.findByIdAndUpdate(order, {
+          orderStatus: "Out for Delivery",
+          assignmentStatus: "Assigned to Delivery Station Driver",
+          deliveryStationDriver: driverId,
+          assignedToDeliveryStationDriverAt: Date.now(),
+        })
+    )
+  );
+
+  await User.findByIdAndUpdate(driverId, { isDriverAvailable: false });
+  sendResponse(res, updatedOrders);
+});
+
+const getAssignedOrdersForDriver = catchAsync(async (req, res, next) => {
+  const user = req.user;
+  let orders;
+  if (user.role === "warehouseDriver") {
+    orders = await Order.find({
+      warehouseDriver: user._id,
+      assignmentStatus: "Assigned to Warehouse Driver",
+    }).sort("deliveryStation");
+  } else if (user.role === "deliveryStationDriver") {
+    orders = await Order.find({
+      deliveryStationDriver: user._id,
+      assignmentStatus: "Assigned to Delivery Station Driver",
+    }).sort("shippingAddress");
+  }
+  if (!orders) return next(new AppError("Orders not Found", 404));
+  sendResponse(res, orders);
+});
+
+export {
+  placeOrder,
+  checkProductAvailability,
+  isStockAvailableInWarehouse,
+  getOrdersForManager,
+  assignOrdersToWarehouseDriver,
+  getAssignedOrdersForDriver,
+  assignOrdersToDeliveryStationDriver,
+};
+
+
+
+import mongoose from "mongoose";
+import crypto from "crypto";
+
+const orderSchema = new mongoose.Schema(
+  {
+    orderNumber: {
+      type: String,
+      unique: true,
+      trim: true,
+      minlength: [5, "Order number must be at least 5 characters long"],
+    },
+    customer: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: [true, "User is required"],
+    },
+    items: {
+      type: [
+        {
+          product: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Product",
+            required: [true, "Product is required"],
+          },
+          variant: {
+            type: String,
+            required: true,
+          },
+          quantity: {
+            type: Number,
+            required: [true, "Product quantity is required"],
+            min: [1, "Quantity must be at least 1"],
+          },
+          price: {
+            type: Number,
+            required: [true, "Product price is required"],
+            min: [0, "Price cannot be negative"],
+          },
+          discount: {
+            type: Number,
+            min: [0, "Discount cannot be negative"],
+            max: [100, "Discount cannot exceed 100%"],
+            default: 0,
+          },
+          totalPrice: {
+            type: Number,
+            required: [true, "Total price is required"],
+          },
+        },
+      ],
+      required: [true, "Items are required"],
+      validate: {
+        validator: function (value) {
+          return value.length > 0;
+        },
+        message: "Items cannot be empty",
+      },
+    },
+    deliveryCost: {
+      type: Number,
+      default: 40,
+    },
+    totalAmount: {
+      type: Number,
+      required: [true, "Total amount is required"],
+      min: [0, "Total amount cannot be negative"],
+    },
+    shippingAddress: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Address",
+      required: [true, "Shipping address is required"],
+    },
+    paymentStatus: {
+      type: String,
+      enum: ["Pending", "Completed", "Failed"],
+      default: "Pending",
+    },
+    paymentMethod: {
+      type: String,
+      enum: ["COD"],
+      default: "COD",
+    },
+    orderStatus: {
+      type: String,
+      enum: [
+        "Processing",
+        "Shipped",
+        "Arrived at Delivery Station",
+        "Out for Delivery",
+        "Delivered",
+        "Cancelled",
+      ],
+      default: "Processing",
+    },
+    assignmentStatus: {
+      type: String,
+      enum: [
+        "Not Assigned",
+        "Assigned to Warehouse Driver",
+        "Delivered to Delivery Station",
+        "Assigned to Delivery Station Driver",
+        "Delivered",
+      ],
+      default: "Not Assigned",
+    },
+    warehouse: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Warehouse",
+      required: [true, "Warehouse is required"],
+    },
+    deliveryStation: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DeliveryStation",
+      required: [true, "Delivery station is required"],
+    },
+    warehouseDriver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    deliveryStationDriver: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    vehicle: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Vehicle",
+    },
+    deliveryDate: {
+      type: Date,
+      default: () => {
+        const deliveryDate = new Date();
+        deliveryDate.setDate(deliveryDate.getDate() + 5);
+        return deliveryDate;
+      },
+    },
+    deliveredAt: Date,
+    totalWeight: Number,
+    totalVolume: {
+      length: Number,
+      width: Number,
+      height: Number,
+    },
+    assignedToWarehouseDriverAt: {
+      type: Date,
+    },
+    assignedToDeliveryStationDriverAt: {
+      type: Date,
+    },
+    isDelivered: {
+      type: Boolean,
+      default: false,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+orderSchema.pre("save", async function (next) {
+  if (!this.orderNumber) {
+    try {
+      const dateStr = new Date().toISOString().replace(/[-:.TZ]/g, "");
+      const randomHash = crypto.randomBytes(3).toString("hex");
+      this.orderNumber = `ORD-${dateStr}-${randomHash}`;
+
+      next();
+    } catch (error) {
+      next(error);
+    }
+  } else {
+    next();
+  }
+});
+
+const Order = mongoose.model("Order", orderSchema);
+export default Order;
+
+
+
+import express from "express";
+import {
+  checkProductAvailability,
+  assignOrdersToWarehouseDriver,
+  getOrdersForManager,
+  getAssignedOrdersForDriver,
+  isStockAvailableInWarehouse,
+  placeOrder,
+  assignOrdersToDeliveryStationDriver,
+} from "../controllers/order.controller.js";
+import { protect, restrictTo } from "../controllers/auth.controller.js";
+
+const router = express.Router();
+router
+  .route("/checkAvailability")
+  .post(protect, isStockAvailableInWarehouse, checkProductAvailability);
+router.route("/place").post(protect, isStockAvailableInWarehouse, placeOrder);
+router.route("/manager").get(protect, getOrdersForManager);
+router
+  .route("/warehouse-manager/assign")
+  .post(protect, restrictTo("warehouseManager"), assignOrdersToWarehouseDriver);
+router
+  .route("/deliveryStation-manager/assign")
+  .post(
+    protect,
+    restrictTo("deliveryStationManager"),
+    assignOrdersToDeliveryStationDriver
+  );
+router.route("/driver").get(protect, getAssignedOrdersForDriver);
+
+export default router;
+
+----------------------------------------------------------------------------------------------------
+-> product
+
+import City from "../models/city.model.js";
+import Product from "../models/product.model.js";
+import ProductCategory from "../models/productCategory.model.js";
+import Warehouse from "../models/warehouse.model.js";
+import AppError from "../utils/AppError.js";
+import catchAsync from "../utils/catchAsync.js";
+import { filterObject } from "../utils/helper.js";
+import {
+  createOne,
+  getById,
+  getByIdAndUpdate,
+  getMany,
+  sendResponse,
+  updateOne,
+} from "./factoryHandler.js";
+
+const createProduct = catchAsync(async (req, res, next) => {
+  const allowedFields = [
+    "name",
+    "description",
+    "additionalInformation",
+    "category",
+    "brand",
+    "maxPurchaseQuantity",
+    "tags",
+    "variants",
+    "weight",
+    "dimensions",
+    "isFeatured",
+  ];
+  const filteredBody = filterObject(req.body, allowedFields);
+
+  const product = await Product.create(filteredBody);
+
+  // add default stock of variant in warehouse
+  const warehouses = await Warehouse.find({ isActive: true });
+
+  await Promise.all(
+    warehouses.map(async (warehouse) => {
+      const productEntry = {
+        product: product._id,
+        variants: product.variants.map((variant) => ({
+          sku: variant.sku,
+          stock: 10,
+        })),
+      };
+
+      warehouse.products.push(productEntry);
+      await warehouse.save();
+    })
+  );
+
+  sendResponse(res, product);
+});
+
+const getProducts = getMany(Product, {
+  path: "category",
+  select: "name",
+});
+
+const getProduct = getById(Product, {
+  path: "category",
+  select: "name",
+});
+
+const updateProduct = updateOne(Product, [
+  "name",
+  "description",
+  "additionalInformation",
+  "category",
+  "brand",
+  "maxPurchaseQuantity",
+  "tags",
+  "weight",
+  "dimensions",
+  "isFeatured",
+  "isActive",
+]);
+
+const updateVariant = catchAsync(async (req, res, next) => {
+  const product = await Product.findById(req.params.id);
+  if (!product)
+    return next(new AppError(`No product found with id ${req.params.id}`, 404));
+
+  const { variantId, attributes, price, discount, isActive } = req.body;
+
+  const variant = product.variants.find((v) => v._id.toString() === variantId);
+  if (!variant) return next(new AppError(`No variant found with id ${variantId}`, 404));
+  if (attributes) variant.attributes = attributes;
+  if (price) variant.price = price;
+  if (discount) variant.discount = discount;
+  if (isActive) variant.isActive = isActive;
+
+  const updatedProduct = await product.save();
+  res.status(200).json({
+    status: "success",
+    data: {
+      updatedProduct,
+    },
+  });
+});
+
+const checkProductAvailability = catchAsync(async (req, res, next) => {
+  const { productId, variantSku, pincode } = req.body;
+  if (!productId || !variantSku || !pincode)
+    return next(new AppError("Please provide productId, variantSku and pincode", 400));
+
+  const product = await Product.findById(productId);
+  if (!product) return next(new AppError("Product not found", 404));
+
+  const variant = product.variants.find((variant) => variant.sku === variantSku);
+  if (!variant) return next(new AppError("Variant not found", 404));
+
+  const result = /^[0-9]{6}$/.test(pincode);
+  if (!result) return next(new AppError("Please provide valid pincode", 400));
+
+  const city = await City.findOne({ pincodes: pincode });
+  if (!city) return next(new AppError("Not Deliverable", 404));
+
+  const warehouse = await Warehouse.findOne({ transportCities: city._id });
+  if (!warehouse) return next(new AppError("Not Deliverable", 404));
+
+  const warehouseProduct = warehouse.products.find((p) => p.product.equals(productId));
+  if (!warehouseProduct) return next(new AppError("Not Available", 404));
+
+  const warehouseVariant = warehouseProduct.variants.find((v) => v.sku === variantSku);
+  if (!warehouseVariant) return next(new AppError("Not Available", 404));
+
+  const variantStock = warehouseVariant.stock;
+  if (variantStock === 0) return next(new AppError("Out of Stock", 404));
+
+  sendResponse(res, result);
+});
+
+export {
+  createProduct,
+  getProducts,
+  getProduct,
+  updateProduct,
+  updateVariant,
+  checkProductAvailability,
+};
+
+
+import mongoose from "mongoose";
+import slugify from "slugify";
+import crypto from "crypto";
+
+const productSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: [true, "Product name is required"],
+      trim: true,
+      unique: true,
+      minlength: [2, "Product name must be at least 2 characters long."],
+      maxlength: [200, "Product name cannot exceed 200 characters"],
+    },
+    slug: {
+      type: String,
+      unique: true,
+      trim: true,
+      lowercase: true,
+      validate: {
+        validator: function (value) {
+          return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+        },
+        message: "Slug must be a valid URL-friendly string (lowercase, hyphen-separated)",
+      },
+    },
+    description: {
+      type: String,
+      trim: true,
+      minlength: [5, "Product description must be at least 5 characters long."],
+      maxlength: [1000, "Product description cannot exceed 100 characters"],
+    },
+    additionalInformation: {
+      type: [
+        {
+          name: {
+            type: String,
+            required: true,
+          },
+          value: {
+            type: String,
+            required: true,
+          },
+        },
+      ],
+    },
+    category: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ProductCategory",
+      required: [true, "Product category is required"],
+    },
+    brand: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: [100, "Brand name cannot exceed 100 characters."],
+    },
+    maxPurchaseQuantity: {
+      type: Number,
+      required: [true, "Maximum purchase quantity is required"],
+      min: [1, "Minimum purchase quantity must be at least 1"],
+      max: [100, "Max purchase quantity cannot exceed 100"],
+    },
+    tags: [String],
+    variants: {
+      type: [
+        {
+          attributes: {
+            type: [
+              {
+                name: {
+                  type: String,
+                  required: [true, "Variant attribute name is required."], // e.g., "Color", "Size", "RAM", etc.
+                  trim: true,
+                },
+                value: {
+                  type: String,
+                  required: [true, "Variant attribute value is required."], // e.g., "Red", "Large", "8GB-128GB", etc.
+                  trim: true,
+                },
+              },
+            ],
+            required: [true, "Variant attribute value is required"],
+            validate: {
+              validator: function (value) {
+                return value.length > 0;
+              },
+              message: "Attributes can not be empty",
+            },
+          },
+          price: {
+            type: Number,
+            required: [true, "Variant price is required"],
+            min: [0, "Variant Price cannot be negative"],
+            max: [1000000, "Variant Price exceeds the allowed limit"],
+          },
+          discount: {
+            type: Number,
+            default: 0,
+            min: [0, "Variant Discount cannot be negative"],
+            max: [100, "Variant Discount cannot be more than 100%"],
+          },
+          sku: {
+            type: String,
+            unique: true,
+            trim: true,
+            maxlength: [250, "SKU cannot exceed 250 characters."],
+          },
+          images: {
+            type: [String],
+            required: [true, "Variant images are required"],
+            validate: [
+              {
+                validator: function (value) {
+                  return value.length > 0;
+                },
+                message: "Variant images can not be empty",
+              },
+              {
+                validator: function (images) {
+                  return images.length <= 8;
+                },
+                message: "you cannot have more than 8 images per Variant.",
+              },
+              {
+                validator: function (images) {
+                  return images.every(
+                    (image) => typeof image === "string" && image.trim().length > 0
+                  );
+                },
+                message: "Each image must be a non-empty string",
+              },
+            ],
+          },
+          isActive: {
+            type: Boolean,
+            default: true,
+          },
+        },
+      ],
+      required: [true, "Variant is required"],
+      validate: {
+        validator: function (value) {
+          return value.length > 0;
+        },
+        message: "Atleast One Variant is required",
+      },
+    },
+    weight: {
+      type: Number,
+      required: [true, "Product weight is required"],
+      min: [0, "Weight must be positive"],
+      max: [10, "Weight cannot exceed to 10kg"],
+    },
+    dimensions: {
+      length: {
+        type: Number,
+        required: [true, "Product length is required"],
+        min: [0, "Length must be positive"],
+        max: [200, "Length cannot exceed to 200cm"],
+      },
+      height: {
+        type: Number,
+        required: [true, "Product height is required"],
+        min: [0, "Height must be positive"],
+        max: [200, "Height cannot exceed to 200cm"],
+      },
+      width: {
+        type: Number,
+        required: [true, "Product width is required"],
+        min: [0, "Width must be positive"],
+        max: [200, "Width cannot exceed to 200cm"],
+      },
+    },
+    isFeatured: {
+      type: Boolean,
+      default: false,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+productSchema.pre("save", function (next) {
+  const product = this;
+
+  // Generate slug based on the product name
+  if (!product.slug || product.isModified("name")) {
+    product.slug = slugify(product.name, { lower: true, strict: true });
+  }
+
+  // Generate SKU for each variant if not provided
+  product.variants.forEach((variant) => {
+    if (!variant.sku) {
+      const variantAttributes = variant.attributes
+        .map((attr) => attr.value.replace(/\s+/g, "-").toLowerCase())
+        .join("-");
+      const uniqueId = crypto.randomBytes(3).toString("hex"); // Generate a short unique ID
+      variant.sku = `${slugify(product.name, {
+        lower: true,
+      })}-${variantAttributes}-${uniqueId}`;
+    }
+  });
+
+  next();
+});
+
+const Product = mongoose.model("Product", productSchema);
+export default Product;
+
+
+import express from "express";
+import {
+  checkProductAvailability,
+  createProduct,
+  getProduct,
+  getProducts,
+  updateProduct,
+  updateVariant,
+} from "../controllers/product.controller.js";
+import {
+  categoryExists,
+  isLeafCategory,
+} from "../controllers/productCategory.controller.js";
+
+const router = express.Router();
+router.route("/").get(getProducts).post(categoryExists, isLeafCategory, createProduct);
+router.route("/checkProductAvailability").patch(checkProductAvailability);
+router.route("/:id").get(getProduct).patch(updateProduct);
+router.route("/:id/variant").patch(updateVariant);
+
+export default router;
+
+----------------------------------------------------------------------------------------------------
+-> product category
+
+
+import slugify from "slugify";
+import ProductCategory from "../models/productCategory.model.js";
+import AppError from "../utils/AppError.js";
+import catchAsync from "../utils/catchAsync.js";
+import { filterObject } from "../utils/helper.js";
+import { getById, getMany, sendResponse } from "./factoryHandler.js";
+import Product from "../models/product.model.js";
+import multer from "multer";
+import cloudinary from "../utils/cloudinary.js";
+import { CloudinaryStorage } from "multer-storage-cloudinary";
+
+// Configure Cloudinary Storage with Multer
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: "category",
+    format: async (req, file) => "jpg",
+    public_id: (req, file) => Date.now() + "-" + file.originalname,
+  },
+});
+
+// Multer middleware configuration
+const upload = multer({ storage: storage });
+
+const categoryExists = catchAsync(async (req, res, next) => {
+  const categoryId = req.body.category || req.params.id;
+  const category = await ProductCategory.findById(categoryId);
+  if (!category)
+    return next(new AppError("Category not found! Please provide valid Category.", 404));
+  next();
+});
+
+const isLeafCategory = catchAsync(async (req, res, next) => {
+  const categoryId = req.body.category || req.params.id;
+  const category = await ProductCategory.findById(categoryId);
+  if (!category) return next(new AppError("Category not found", 404));
+  if (category.subCategories?.length > 0)
+    return next(new AppError("Category is not a leaf category", 400));
+  next();
+});
+
+const createCategory = catchAsync(async (req, res, next) => {
+  let imagePublicId;
+  try {
+    const allowedFields = ["name", "description", "parentCategory", "isFeatured"];
+    const filteredBody = filterObject(req.body, allowedFields);
+
+    if (filteredBody.parentCategory) {
+      const available = await ProductCategory.findById(filteredBody.parentCategory);
+      if (!available) return next(new AppError("Invalid parent category.", 400));
+    }
+
+    filteredBody.image = req.file.path;
+    imagePublicId = req.file.fileName;
+
+    const category = await ProductCategory.create(filteredBody);
+    await ProductCategory.findByIdAndUpdate(filteredBody.parentCategory, {
+      $push: { subCategories: category._id },
+    });
+
+    sendResponse(res, category);
+  } catch (err) {
+    await cloudinary.uploader.destroy(imagePublicId);
+    return next(new AppError("Category creation failed. Image removed.", 500));
+  }
+});
+
+const getCategories = catchAsync(async (req, res, next) => {
+  const categories = await ProductCategory.find({ parentCategory: null });
+  if (categories.length === 0) return next(new AppError("No categories found", 404));
+
+  const populatedCategories = await Promise.all(
+    categories.map(async (category) => {
+      return await populateSubCategory(category);
+    })
+  );
+
+  res.status(200).json({
+    status: "success",
+    "result(s)": populatedCategories.length,
+    data: {
+      populatedCategories,
+    },
+  });
+});
+
+const populateSubCategory = async (category) => {
+  if (!category || !category.subCategories || !category.subCategories.length === 0)
+    return category;
+
+  category = await category.populate("subCategories");
+
+  await Promise.all(
+    category.subCategories.map(async (subCategory) => {
+      await populateSubCategory(subCategory);
+    })
+  );
+
+  return category;
+};
+
+const getCategory = getById(ProductCategory);
+
+const updateCategory = catchAsync(async (req, res, next) => {
+  const allowedFields = ["name", "description", "image", "isFeatured", "isActive"];
+  const filteredBody = filterObject(req.body, allowedFields);
+
+  const category = await ProductCategory.findByIdAndUpdate(req.params.id, filteredBody);
+  if (!category) return next(new AppError("Category not found", 404));
+
+  category.slug = slugify(req.body.name, { lower: true, strict: true });
+  category.save();
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      category,
+    },
+  });
+});
+
+const updateParentCategory = catchAsync(async (req, res, next) => {
+  const { parentCategory } = req.body;
+  const { id } = req.params;
+
+  if (!parentCategory) return next(new AppError("Please provide Parent Category.", 400));
+  const parent = await ProductCategory.findById(parentCategory);
+  if (!parent) return next(new AppError("Invalid Parent Category", 400));
+
+  const subCategory = await ProductCategory.findById(id);
+  if (!subCategory) return next(new AppError(`No Category found with id : ${id}`, 400));
+  if (subCategory.parentCategory) {
+    if (subCategory.parentCategory.equals(parentCategory)) {
+      return next(
+        new AppError("Parent Category cannot be the same as the old one.", 400)
+      );
+    }
+    const oldParent = await ProductCategory.findById(subCategory.parentCategory);
+    oldParent.subCategories = oldParent.subCategories.filter(
+      (c) => !c.equals(subCategory._id)
+    );
+    await oldParent.save();
+  }
+
+  subCategory.parentCategory = parent._id;
+  await subCategory.save();
+  parent.subCategories.push(subCategory._id);
+  await parent.save({ validateBeforeSave: false });
+
+  res.status(200).json({
+    status: "success",
+    data: {
+      subCategory,
+    },
+  });
+});
+
+const deleteCategory = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const category = await ProductCategory.findById(id);
+  if (!category) return next(new AppError(`No category found for ${id}`, 404));
+
+  if (category.subCategories && category.subCategories.length !== 0)
+    return next(
+      new AppError(
+        `Cannot delete Category. Category contains sub-categories. If you want to delete this category then delete sub-categories first.`,
+        400
+      )
+    );
+
+  const parent = await ProductCategory.findById(category.parentCategory);
+  parent.subCategories = parent.subCategories.filter((c) => !c.equals(category._id));
+  await parent.save();
+  await ProductCategory.findByIdAndDelete(category._id);
+
+  res.status(200).json({
+    status: "success",
+    data: null,
+  });
+});
+
+const getProductsUnderCategory = (req, res, next) =>
+  getMany(
+    Product,
+    {
+      path: "category",
+      select: "name",
+    },
+    { category: req.params.id }
+  )(req, res, next);
+
+export {
+  createCategory,
+  getCategories,
+  getCategory,
+  updateCategory,
+  updateParentCategory,
+  deleteCategory,
+  categoryExists,
+  isLeafCategory,
+  getProductsUnderCategory,
+  upload,
+};
+
+
+
+import mongoose from "mongoose";
+import slugify from "slugify";
+import { capitalizeFirstLetter, removeSpace } from "../utils/helper.js";
+import AppError from "../utils/AppError.js";
+
+const productCategorySchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: [true, "Category name is required!"],
+      unique: true,
+      trim: true,
+      minlength: [2, "Category name must be at least 2 characters long."],
+      maxlength: [100, "Category name cannot exceed 100 characters"],
+    },
+    slug: {
+      type: String,
+      unique: true,
+      trim: true,
+      lowercase: true,
+      validate: {
+        validator: function (value) {
+          return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
+        },
+        message: "Slug must be a valid URL-friendly string (lowercase, hyphen-separated)",
+      },
+    },
+    description: {
+      type: String,
+      trim: true,
+      minlength: [5, "Category description must be at least 5 characters long."],
+      maxlength: [500, "Description cannot exceed 500 characters"],
+    },
+    parentCategory: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ProductCategory",
+      default: null,
+    },
+    subCategories: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "ProductCategory",
+      },
+    ],
+    image: {
+      type: String,
+      validate: {
+        validator: function (value) {
+          return /^(http|https):\/\/[^ "]+$/.test(value);
+        },
+        message: "Image must be a valid URL",
+      },
+    },
+    isFeatured: {
+      type: Boolean,
+      default: false,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  {
+    timestamps: true,
+    toJSON: { virtuals: true, versionKey: false },
+    toObject: { virtuals: true, versionKey: false },
+  }
+);
+
+productCategorySchema.virtual("isParent").get(function () {
+  return !this.parentCategory;
+});
+
+productCategorySchema.pre("save", async function (next) {
+  if (this.parentCategory && this.parentCategory.equals(this._id))
+    return next(new AppError("A Product Category cannot be it's own Category", 400));
+  next();
+});
+
+// Pre-save hook to automatically create slug from the category name
+productCategorySchema.pre("save", function (next) {
+  if (!this.slug || this.isModified("name")) {
+    this.slug = slugify(this.name, { lower: true, strict: true });
+  }
+  next();
+});
+
+productCategorySchema.pre("save", function (next) {
+  if (this.name) {
+    capitalizeFirstLetter("name");
+    removeSpace("name");
+  }
+  next();
+});
+
+const ProductCategory = mongoose.model("ProductCategory", productCategorySchema);
+export default ProductCategory;
+
+
+
+import express from "express";
+import {
+  createCategory,
+  deleteCategory,
+  getCategories,
+  getCategory,
+  getProductsUnderCategory,
+  updateCategory,
+  updateParentCategory,
+  upload,
+} from "../controllers/productCategory.controller.js";
+
+const router = express.Router();
+router.route("/").get(getCategories).post(upload.single("categoryImage"), createCategory);
+router.route("/:id").get(getCategory).patch(updateCategory).delete(deleteCategory);
+router.route("/:id/parent").patch(updateParentCategory);
+router.route("/:id/products").get(getProductsUnderCategory);
+
+export default router;
+
+----------------------------------------------------------------------------------------------------
+-> user
+
+
+import crypto from "crypto";
+import bcrypt from "bcrypt";
+import Address from "../models/address.model.js";
+import City from "../models/city.model.js";
+import User from "../models/user.model.js";
+import AppError from "../utils/AppError.js";
+import catchAsync from "../utils/catchAsync.js";
+import {
+  createOne,
+  getById,
+  getByIdAndUpdate,
+  getMany,
+  sendResponse,
+} from "./factoryHandler.js";
+import { sendEmail } from "../utils/sendEmail.js";
+import Order from "../models/order.model.js";
+import DeliveryStation from "../models/deliveryStation.model.js";
+import Vehicle from "../models/vehicle.model.js";
+
+const checkManagerAlredyExists = catchAsync(async (req, res, next) => {
+  const { warehouse, deliveryStation } = req.body;
+  if (warehouse) {
+    const managerExists = await User.findOne({
+      warehouse,
+      role: "warehouseManager",
+    });
+    if (managerExists)
+      return next(new AppError("Manager already exists for this Warehouse.", 400));
+  }
+  if (deliveryStation) {
+    const managerExists = await User.findOne({
+      deliveryStation,
+      role: "deliveryStationManager",
+    });
+    if (managerExists)
+      return next(new AppError("Manager already exists for this Delivery Station.", 400));
+  }
+  next();
+});
+
+const checkUserType = catchAsync(async (req, res, next) => {
+  const { warehouse, deliveryStation } = req.body;
+  if (!warehouse && !deliveryStation)
+    return next(
+      new AppError(
+        "Warehouse Id or Delivery Station Id is required to add a manager.",
+        400
+      )
+    );
+  if (warehouse && deliveryStation)
+    return next(
+      new AppError(
+        "Please provide either Warehouse Id or Delivery Station Id. You cannot pass both.",
+        400
+      )
+    );
+  next();
+});
+
+const checkDriverLicense = catchAsync(async (req, res, next) => {
+  const { driverLicenseNumber } = req.body;
+  if (!driverLicenseNumber)
+    return next(new AppError("Please provide driver license number", 400));
+  next();
+});
+
+const createManager = createOne(User, [
+  "name",
+  "email",
+  "password",
+  "passwordConfirm",
+  "dateOfBirth",
+  "gender",
+  "phone",
+  "warehouse",
+  "deliveryStation",
+]);
+
+const createDriver = createOne(User, [
+  "name",
+  "email",
+  "password",
+  "passwordConfirm",
+  "dateOfBirth",
+  "gender",
+  "phone",
+  "warehouse",
+  "deliveryStation",
+  "driverLicenseNumber",
+]);
+
+const getUsers = getMany(User, [
+  { path: "warehouse", select: "name" },
+  { path: "deliveryStation", select: "name" },
+]);
+
+const getUser = getById(User, [
+  { path: "warehouse", select: "name" },
+  { path: "deliveryStation", select: "name" },
+]);
+
+const updateUser = getByIdAndUpdate(User, ["warehouse", "deliveryStation", "isActive"]);
+
+const addUserAddress = catchAsync(async (req, res, next) => {
+  const user = await User.findById(req.user._id);
+  if (user.address && user.address.length === 5)
+    return next(new AppError("You can not have more than 5 address.", 400));
+
+  const { street, city, postalCode } = req.body;
+  const cityExists = await City.findById(city);
+  if (!cityExists)
+    return next(new AppError("City does not exists, Please select another city.", 400));
+
+  const address = await Address.create({ street, city, postalCode });
+  await User.findByIdAndUpdate(req.user._id, {
+    $push: { address },
+    $slice: { address: 5 },
+  });
+  sendResponse(res, address);
+});
+
+const getUserAddress = catchAsync(async (req, res, next) => {
+  const user = await User.findById(req.user._id).populate("address");
+  sendResponse(res, user.address);
+});
+
+const removeUserAddress = catchAsync(async (req, res, next) => {
+  const { addressId } = req.params;
+  const userExists = await User.findById(req.user._id);
+  if (!userExists.address || userExists.address.length === 0)
+    return next(new AppError("You do not have any address saved", 400));
+
+  const user = await User.findByIdAndUpdate(
+    req.user._id,
+    { $pull: { address: addressId } },
+    { new: true }
+  );
+  sendResponse(res, user.address);
+});
+
+const updateDefaultAddress = catchAsync(async (req, res, next) => {
+  const { addressId } = req.params;
+  const addressExists = await Address.findById(addressId);
+  if (!addressExists) return next(new AppError("No address found", 404));
+
+  await Address.updateMany({ isPrimary: true }, { $set: { isPrimary: false } });
+  const updatedAddress = await Address.findByIdAndUpdate(addressId, { isPrimary: true });
+  sendResponse(res, updatedAddress);
+});
+
+const createAndSendOtpToManager = catchAsync(async (req, res, next) => {
+  const orders = await Order.find({
+    warehouseDriver: req.user._id,
+    assignmentStatus: "Assigned To Warehouse Driver",
+  });
+  if (!orders.length)
+    return next(new AppError("You don't have any assigned orders to send OTP.", 404));
+
+  const { deliveryStationId } = req.body;
+  if (!deliveryStationId)
+    return next(new AppError("Please provide a delivery station id.", 400));
+
+  const manager = await User.findOne({
+    deliveryStation: deliveryStationId,
+    role: "deliveryStationManager",
+  });
+  if (!manager)
+    return next(new AppError("please provide valid delivery station id.", 400));
+
+  const otp = crypto.randomInt(100000, 999999).toString();
+  const hashedOtp = await bcrypt.hash(otp, 10);
+
+  const info = await sendEmail(manager._id, otp);
+  if (!info)
+    return next(new AppError("Failed to send email. Please try again later.", 500));
+
+  await User.findByIdAndUpdate(manager._id, {
+    otp: hashedOtp,
+    otpExpiresIn: Date.now() + 10 * 60 * 1000,
+  });
+  sendResponse(res, info);
+});
+
+const verifyManagerOtp = catchAsync(async (req, res, next) => {
+  const { otp, deliveryStationId } = req.body;
+  if (!deliveryStationId)
+    return next(new AppError("Please provide delivery station Id", 400));
+  const deliveryStation = await DeliveryStation.findById(deliveryStationId);
+  if (!deliveryStation)
+    return next(new AppError("Please provide valid delivery station Id", 400));
+
+  const orders = await Order.find({
+    warehouseDriver: req.user._id,
+    assignmentStatus: "Assigned to Warehouse Driver",
+    deliveryStation: deliveryStationId,
+  }).select("_id");
+  if (!orders || !orders.length)
+    return next(new AppError("No orders found for this delivery station.", 400));
+
+  const manager = await User.findOne({
+    deliveryStation: deliveryStationId,
+    role: "deliveryStationManager",
+  }).select("opt otpExpiresIn");
+  if (!manager)
+    return next(new AppError("No manager found for provided delivery station id", 404));
+
+  if (Date.now() > manager.otpExpiresIn) throw new Error("OTP expired or invalid");
+
+  if (!manager.otp)
+    return next(
+      new AppError("Please send OTP to delivery station manager to verify.", 400)
+    );
+
+  const isOtpValid = await bcrypt.compare(otp, manager.otp);
+  if (!isOtpValid) return next(new AppError("Invalid OTP", 400));
+
+  // change status of orders
+  await Promise.all(
+    orders.map(async (order) => {
+      await Order.findByIdAndUpdate(order, {
+        orderStatus: "Arrived at Delivery Station",
+        assignmentStatus: "Deliverd to Delivery Station",
+      });
+    })
+  );
+
+  // change availability of driver and vehicle if all orders are delivered
+  const pendingOrders = await Order.find({
+    warehouseDriver: req.user._id,
+    assignmentStatus: "Assigned to Warehouse Driver",
+  });
+  if (pendingOrders.length === 0) {
+    await User.findByIdAndUpdate(req.user._id, {
+      isDriverAvailable: true,
+    });
+
+    const order = await Order.findById(orders[0]);
+    const vehicleId = order.vehicle;
+    await Vehicle.findByIdAndUpdate(vehicleId, { isAvailable: true });
+  }
+
+  await User.findByIdAndUpdate(manager._id, { otp: null, optExpiresIn: null });
+  sendResponse(res, isOtpValid);
+});
+
+const createAndSendOtpToCustomer = catchAsync(async (req, res, next) => {
+  const orders = await Order.find({
+    deliveryStationDriver: req.user._id,
+    assignmentStatus: "Assigned to Delivery Station Driver",
+  });
+  if (!orders.length)
+    return next(new AppError("You don't have any assigned orders to send OTP.", 404));
+
+  const { orderId } = req.body;
+  if (!orderId) return next(new AppError("Please provide a order id.", 400));
+
+  const order = await Order.findOne({ _id: orderId, orderStatus: "Out for Delivery" });
+  if (!order)
+    return next(
+      new AppError(`Order not found or Order has been already delivered.`, 400)
+    );
+
+  const customerId = order.customer;
+  const otp = crypto.randomInt(100000, 999999).toString();
+  const hashedOtp = await bcrypt.hash(otp, 10);
+
+  const info = await sendEmail(customerId, otp);
+  if (!info)
+    return next(new AppError("Failed to send email. Please try again later.", 500));
+
+  await User.findByIdAndUpdate(customerId, {
+    otp: hashedOtp,
+    otpExpiresIn: Date.now() + 10 * 60 * 1000,
+  });
+  sendResponse(res, info);
+});
+
+const verifyCustomerOTP = catchAsync(async (req, res, next) => {
+  const { otp, orderId } = req.body;
+  if (!orderId) return next(new AppError("Please provide order Id", 400));
+
+  const order = await Order.findOne({ _id: orderId, orderStatus: "Out for Delivery" });
+  if (!order) return next(new AppError("Please provide valid order Id", 400));
+
+  const customer = await User.findById(order.customer).select("otp otpExpiresIn");
+  if (!customer || Date.now() > customer.otpExpiresAt)
+    throw new Error("OTP expired or invalid");
+
+  if (!customer.otp)
+    return next(new AppError("Please send OTP to customer to verify.", 400));
+
+  const isOtpValid = await bcrypt.compare(otp, customer.otp);
+  if (!isOtpValid) return next(new AppError("Invalid OTP", 400));
+
+  // change status of orders
+
+  await Order.findByIdAndUpdate(order._id, {
+    orderStatus: "Delivered",
+    assignmentStatus: "Delivered",
+  });
+  await User.findByIdAndUpdate(customer._id, {
+    otp: null,
+    otpExpiresIn: null,
+  });
+
+  // change availability of driver and vehicle if all orders are delivered
+  const pendingOrders = await Order.find({
+    deliveryStationDriver: req.user._id,
+    assignmentStatus: "Assigned to Delivery Station Driver",
+  });
+  if (pendingOrders.length === 0) {
+    await User.findByIdAndUpdate(req.user._id, {
+      isDriverAvailable: true,
+    });
+  }
+
+  sendResponse(res, isOtpValid);
+});
+
+export {
+  checkUserType,
+  checkManagerAlredyExists,
+  checkDriverLicense,
+  createManager,
+  createDriver,
+  getUsers,
+  getUser,
+  updateUser,
+  addUserAddress,
+  getUserAddress,
+  removeUserAddress,
+  updateDefaultAddress,
+  createAndSendOtpToManager,
+  verifyManagerOtp,
+  createAndSendOtpToCustomer,
+  verifyCustomerOTP,
+};
+
+
+import mongoose from "mongoose";
+import validator from "validator";
+import bcrypt from "bcrypt";
+
+const userSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: [true, "User name is required"],
+      trim: true,
+      minlength: [2, "Name must be at least 2 characters long"],
+      maxlength: [50, "Name cannot exceed 50 characters"],
+      match: [/^[A-Za-z\s]+$/, "Name should only contain letters"],
+    },
+    email: {
+      type: String,
+      required: [true, "Email is required"],
+      unique: true,
+      trim: true,
+      lowercase: true,
+      validate: [validator.isEmail, "Please enter a valid email address"],
+    },
+    password: {
+      type: String,
+      required: [true, "Password is required"],
+      minlength: [6, "Password must be at least 6 characters long"],
+      match: [
+        /^(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{6,}$/,
+        "Password must contain at least one uppercase letter, one digit, one special character, and be at least 6 characters long",
+      ],
+      select: false,
+    },
+    passwordConfirm: {
+      type: String,
+      required: [true, "Please Confirm your password"],
+      validate: {
+        validator: function (val) {
+          return val === this.password;
+        },
+        message: "Password do not match",
+      },
+    },
+    role: {
+      type: String,
+      required: [true, "Role is required"],
+      enum: {
+        values: [
+          "admin",
+          "warehouseManager",
+          "deliveryStationManager",
+          "warehouseDriver",
+          "deliveryStationDriver",
+          "customer",
+        ],
+        message: "Role `{VALUE}` is not a valid role",
+      },
+      default: "customer",
+    },
+    dateOfBirth: {
+      type: Date,
+      required: [true, "Date of Birth is required"],
+      validate: [
+        {
+          validator: function (value) {
+            const today = new Date();
+            const age = today.getFullYear() - value.getFullYear();
+            const monthDiff = today.getMonth() - value.getMonth();
+            const dayDiff = today.getDate() - value.getDate();
+
+            // Calculate exact age considering month and day difference
+            const isExactAge = monthDiff > 0 || (monthDiff === 0 && dayDiff >= 0);
+            const currentAge = isExactAge ? age : age - 1;
+
+            return currentAge >= 10 && currentAge <= 100;
+          },
+          message: "Age should be more than 10 years and less than 100 years",
+        },
+        {
+          // Ensure date of birth is in the past
+          validator: function (value) {
+            const today = new Date();
+            return value < today;
+          },
+          message: "Date of birth must be in the past",
+        },
+      ],
+    },
+    gender: {
+      type: String,
+      required: [true, "Gender is required"],
+      enum: {
+        values: ["Male", "Female", "Other"],
+        message: "Gender `{VALUE}` is not a valid gender",
+      },
+      set: function (value) {
+        if (value === "male") return "Male";
+        else if (value === "female") return "Female";
+        else if (value === "other") return "Other";
+        else return value;
+      },
+    },
+    phone: {
+      type: String,
+      required: [true, "Phone number is required"],
+      trim: true,
+      unique: true,
+      match: [/^[6-9]\d{9}$/, "Invalid phone number format"],
+    },
+    address: {
+      type: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Address",
+        },
+      ],
+      validate: {
+        validator: function (value) {
+          return value.length <= 5;
+        },
+        message: "You can have upto 5 addresses",
+      },
+    },
+    warehouse: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Warehouse",
+      required: function () {
+        return this.role === "warehouseManager" || this.role === "warehouseDriver";
+      },
+    },
+    deliveryStation: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "DeliveryStation",
+      required: function () {
+        return (
+          this.role === "deliveryStationManager" || this.role === "deliveryStationDriver"
+        );
+      },
+    },
+    driverLicenseNumber: {
+      type: String,
+      required: function () {
+        return this.role === "warehouseDriver" || this.role === "deliveryStationDriver";
+      },
+      match: [/^[A-Z]{2}[0-9]{2}\s[0-9]{11}$/, "Invlid License Number"],
+    },
+    isDriverAvailable: {
+      type: Boolean,
+    },
+    otp: {
+      type: String,
+      select: false,
+    },
+    otpExpiresIn: {
+      type: Date,
+      select: false,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    passwordChangedAt: Date,
+  },
+  { timestamps: true }
+);
+
+// encrypt password and set passwordConfirm to undefined before save
+userSchema.pre("save", async function (next) {
+  this.password = await bcrypt.hash(this.password, 12);
+  this.passwordConfirm = undefined;
+  next();
+});
+
+userSchema.pre("save", function (next) {
+  if (this.driverLicenseNumber) {
+    if (this.warehouse) this.role = "warehouseDriver";
+    if (this.deliveryStation) this.role = "deliveryStationDriver";
+  } else {
+    if (this.warehouse) this.role = "warehouseManager";
+    if (this.deliveryStation) this.role = "deliveryStationManager";
+  }
+  next();
+});
+
+userSchema.pre("save", function (next) {
+  if (this.driverLicenseNumber) {
+    this.isDriverAvailable = true;
+  }
+  next();
+});
+
+// delete password and role from result getting by creating new user.
+userSchema.set("toJSON", {
+  transform: function (doc, ret) {
+    delete ret.password;
+    delete ret.role;
+    return ret;
+  },
+});
+
+// compare passwords
+userSchema.methods.comparePasswords = async function (candidatePassword, userPassword) {
+  return await bcrypt.compare(candidatePassword, userPassword);
+};
+
+// check if user has changed password after token was assigned
+userSchema.methods.changedPasswordAfter = function (JWTTimestam) {
+  if (this.passwordChangedAt) {
+    const changedTimestamp = parseInt(this.passwordChangedAt.getTime() / 1000, 10);
+    return JWTTimestam < changedTimestamp;
+  }
+  return false;
+};
+
+const User = new mongoose.model("User", userSchema);
+export default User;
+
+
+
+import express from "express";
+import {
+  checkUserType,
+  checkManagerAlredyExists,
+  createManager,
+  getUser,
+  getUsers,
+  updateUser,
+  createDriver,
+  checkDriverLicense,
+  addUserAddress,
+  removeUserAddress,
+  getUserAddress,
+  updateDefaultAddress,
+  createAndSendOtpToManager,
+  verifyManagerOtp,
+  createAndSendOtpToCustomer,
+  verifyCustomerOTP,
+} from "../controllers/user.controller.js";
+import { protect } from "../controllers/auth.controller.js";
+
+const router = express.Router();
+router.route("/").get(getUsers);
+router.route("/address").get(protect, getUserAddress);
+router.route("/:id").get(getUser).patch(checkUserType, updateUser);
+router.route("/manager").post(checkUserType, checkManagerAlredyExists, createManager);
+router.route("/driver").post(checkDriverLicense, checkUserType, createDriver);
+router.route("/address/add").post(protect, addUserAddress);
+router.route("/address/:addressId/remove").patch(protect, removeUserAddress);
+router.route("/address/:addressId/default").patch(protect, updateDefaultAddress);
+router.route("/manager/sendOTP").post(protect, createAndSendOtpToManager);
+router.route("/manager/verifyOTP").post(protect, verifyManagerOtp);
+router.route("/customer/sendOTP").post(protect, createAndSendOtpToCustomer);
+router.route("/customer/verifyOTP").post(protect, verifyCustomerOTP);
+
+export default router;
+
+----------------------------------------------------------------------------------------------------
+-> vehicle
+
+import Vehicle from "../models/vehicle.model.js";
+import AppError from "../utils/AppError.js";
+import catchAsync from "../utils/catchAsync.js";
+import { createOne, getById, getByIdAndUpdate, getMany } from "./factoryHandler.js";
+
+const createVehicle = createOne(Vehicle, ["vehicleNumber", "type", "warehouse"]);
+const getVehicles = getMany(Vehicle, { path: "warehouse", select: "name" });
+const getVehicle = getById(Vehicle, { path: "warehouse", select: "name" });
+const updateVehicle = getByIdAndUpdate(Vehicle, [
+  "vehicleNumber",
+  "type",
+  "warehouse",
+  "isAvailable",
+  "isActive",
+]);
+
+export { createVehicle, getVehicles, getVehicle, updateVehicle };
+
+
+import mongoose from "mongoose";
+
+const vehicleSchema = new mongoose.Schema(
+  {
+    vehicleNumber: {
+      type: String,
+      required: [true, "Vehicle number is required"],
+      unique: true,
+      trim: true,
+      match: [
+        /^[A-Z]{2}\d{2}[A-Z]{2}\d{4}$/,
+        "Vehicle number must follow the format XX00XX0000",
+      ],
+    },
+    type: {
+      type: String,
+      enum: ["Small-Truck", "Van", "Box-Truck"],
+      required: [true, "Vehicle type is required"],
+    },
+    weightCapacity: {
+      type: Number,
+    },
+    dimensions: {
+      length: Number,
+      height: Number,
+      width: Number,
+    },
+    warehouse: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Warehouse",
+    },
+    isAvailable: {
+      type: Boolean,
+      default: true,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+// set weightCapacity and dimensions before save
+vehicleSchema.pre("save", function (next) {
+  if (this.type === "Van") {
+    this.weightCapacity = 1000;
+    this.dimensions = {
+      length: 300,
+      height: 150,
+      width: 150,
+    };
+  } else if (this.type === "Small-Truck") {
+    this.weightCapacity = 1500;
+    this.dimensions = {
+      length: 400,
+      height: 200,
+      width: 200,
+    };
+  } else if (this.type === "Box-Truck") {
+    this.weightCapacity = 3000;
+    this.dimensions = {
+      length: 700,
+      height: 250,
+      width: 250,
+    };
+  }
+  next();
+});
+
+const Vehicle = mongoose.model("Vehicle", vehicleSchema);
+export default Vehicle;
+
+
+import express from "express";
+import {
+  createVehicle,
+  getVehicle,
+  getVehicles,
+  updateVehicle,
+} from "../controllers/vehicle.controller.js";
+import { warehouseExists } from "../controllers/warehouse.controller.js";
+
+const router = express.Router();
+router.route("/").get(getVehicles).post(warehouseExists, createVehicle);
+router.route("/:id").get(getVehicle).patch(warehouseExists, updateVehicle);
+
+export default router;
+
+----------------------------------------------------------------------------------------------------
+-> warehouse
+
+import Product from "../models/product.model.js";
+import Warehouse from "../models/warehouse.model.js";
+import AppError from "../utils/AppError.js";
+import catchAsync from "../utils/catchAsync.js";
+import {
+  createOne,
+  getById,
+  getByIdAndUpdate,
+  getMany,
+  sendResponse,
+} from "./factoryHandler.js";
+
+const getWarehouses = getMany(Warehouse, [
+  {
+    path: "address",
+    select: "street city postalCode",
+    populate: { path: "city", select: "city state country" },
+  },
+  {
+    path: "transportCities",
+    select: "city",
+  },
+]);
+const getWarehouse = getById(Warehouse, [
+  {
+    path: "address",
+    select: "street city postalCode",
+    populate: { path: "city", select: "city state country" },
+  },
+  {
+    path: "transportCities",
+    select: "city",
+  },
+]);
+const createWarehouse = createOne(Warehouse, [
+  "name",
+  "address",
+  "transportCities",
+  "location",
+]);
+const updateWarehouse = getByIdAndUpdate(Warehouse, [
+  "name",
+  "address",
+  "location",
+  "isActive",
+]);
+
+const updateTransportCities = catchAsync(async (req, res, next) => {
+  const { id } = req.params;
+  const { transportCities: cities } = req.body;
+  if (!Array.isArray(cities))
+    return next(new AppError("transportCities must be an array", 400));
+
+  const warehouse = await Warehouse.findByIdAndUpdate(
+    id,
+    {
+      $addToSet: { transportCities: { $each: cities } },
+    },
+    { new: true }
+  );
+
+  if (!warehouse) return next(new AppError("No warehouse found", 404));
+  res.status(200).json({
+    status: "success",
+    data: {
+      warehouse,
+    },
+  });
+});
+
+const warehouseExists = catchAsync(async (req, res, next) => {
+  const id = req.body.warehouse;
+  if (!id) return next(new AppError("Please provide warehouse", 400));
+
+  const warehouse = await Warehouse.findById(id);
+  if (!warehouse)
+    return next(
+      new AppError(
+        `No warehouse found with id : ${id}. Please provide valid warehouse id.`,
+        404
+      )
+    );
+
+  next();
+});
+
+const updateProductStock = catchAsync(async (req, res, next) => {
+  const { productId, sku, stock } = req.body;
+  if (!sku || !stock || stock < 0)
+    return next(new AppError("Please provide valid sku and stock", 400));
+
+  const warehouse = await Warehouse.findById(req.params.id);
+  if (!warehouse) return next(new AppError("Warehouse not found for user", 404));
+
+  const productIndex = warehouse.products.findIndex((p) => p.product.equals(productId));
+  if (productIndex === -1) return next(new AppError("Product not found", 404));
+
+  const variantIndex = warehouse.products[productIndex].variants.findIndex(
+    (v) => v.sku === sku
+  );
+  if (variantIndex === -1) return next(new AppError("Variant not found", 404));
+
+  warehouse.products[productIndex].variants[variantIndex].stock = stock;
+  await warehouse.save();
+  sendResponse(res, warehouse);
+});
+
+export {
+  getWarehouses,
+  getWarehouse,
+  createWarehouse,
+  updateWarehouse,
+  updateTransportCities,
+  updateProductStock,
+  warehouseExists,
+};
+
+
+import mongoose from "mongoose";
+
+const warehouseSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      unique: true,
+      required: [true, "Warehouse name is required"],
+      trim: true,
+      minlength: [2, "Warehouse name must be at least 2 characters long."],
+      maxlength: [100, "Warehouse name cannot exceed 100 characters"],
+      match: [
+        /^[a-zA-Z0-9_ ]+$/,
+        "Warehouse name should only contain letters, numbers, spaces and underscores",
+      ],
+    },
+    address: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Address",
+      required: [true, "Warehouse address is required"],
+    },
+    transportCities: {
+      type: [
+        {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "City",
+        },
+      ],
+      required: [true, "List of cities where warehouse transports orders is required"],
+      validate: {
+        validator: function (value) {
+          return value.length > 0;
+        },
+        message: "List of transport cities can not be empty",
+      },
+    },
+    products: {
+      type: [
+        {
+          product: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Product",
+            required: true,
+          },
+          variants: [
+            {
+              sku: {
+                type: String,
+                required: [true, "Variant SKU is required."],
+                trim: true,
+              },
+              stock: {
+                type: Number,
+                required: [true, "Variant Stock is required."],
+                min: [0, "Variant Stock cannot be negative"],
+                max: [255, "Variant Stock cannot exceed 255 units"],
+              },
+            },
+          ],
+        },
+      ],
+    },
+    location: {
+      type: {
+        type: String,
+        enum: ["Point"],
+        required: [true, "Coordinates type is required"],
+      },
+      coordinates: {
+        type: [Number],
+        required: [true, "Coordinates are required"],
+        validate: {
+          validator: function (value) {
+            return (
+              value.length === 2 &&
+              value[0] >= -180 &&
+              value[0] <= 180 &&
+              value[1] >= -90 &&
+              value[1] <= 90
+            );
+          },
+          message: "Invalid coordinates format",
+        },
+      },
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+warehouseSchema.index({ location: "2dsphere" });
+
+const Warehouse = mongoose.model("Warehouse", warehouseSchema);
+export default Warehouse;
+
+import express from "express";
+import {
+  createWarehouse,
+  getWarehouse,
+  getWarehouses,
+  updateProductStock,
+  updateTransportCities,
+  updateWarehouse,
+} from "../controllers/warehouse.controller.js";
+import { createAddress, updateAddress } from "../controllers/address.controller.js";
+
+const router = express.Router();
+router.route("/").get(getWarehouses).post(createAddress, createWarehouse);
+router.route("/:id").get(getWarehouse).patch(updateWarehouse);
+router.route("/:id/address/:addId").patch(updateAddress, updateWarehouse);
+router.route("/:id/addTransportCities").patch(updateTransportCities);
+router.route("/:id/updateProductStock").patch(updateProductStock);
+
+export default router;
+
+---------------------------------------------------------------------------------------------------
+-> wishlist
+
+import Wishlist from "../models/wishlist.model.js";
+import Product from "../models/product.model.js";
+import { sendResponse } from "./factoryHandler.js";
+import catchAsync from "../utils/catchAsync.js";
+import AppError from "../utils/AppError.js";
+
+const validateWishlistRequest = catchAsync(async (req, res, next) => {
+  const { productId, variantSku } = req.body;
+  if (!productId || !variantSku)
+    return next(new AppError("Please provide product id and variantSku", 400));
+
+  const productExists = await Product.findById(productId);
+  if (!productExists)
+    return next(new AppError(`No product found with id ${productId}`, 404));
+
+  const variantExists = await Product.findOne({
+    _id: productId,
+    "variants.sku": variantSku,
+  });
+  if (!variantExists)
+    return next(new AppError(`No variant found with variant sku : ${variantSku}`, 404));
+
+  next();
+});
+
+const addItemToWishlist = catchAsync(async (req, res, next) => {
+  const { productId, variantSku } = req.body;
+  const wishlist = await Wishlist.findOne({ user: req.user._id });
+
+  if (!wishlist) {
+    // create wishlist
+    const wishlist = await Wishlist.create({ user: req.user._id, items: [] });
+    // and add item to wishlist
+    wishlist.items.push({ product: productId, variants: [{ variantSku }] });
+    await wishlist.save();
+  } else {
+    // check if product exists
+    const productIndex = wishlist.items.findIndex((item) =>
+      item.product.equals(productId)
+    );
+    if (productIndex === -1) {
+      wishlist.items.push({ product: productId, variants: [{ variantSku }] });
+      await wishlist.save();
+    } else {
+      const variantIndex = wishlist.items[productIndex].variants.findIndex(
+        (variant) => variant.variantSku === variantSku
+      );
+      if (variantIndex !== -1)
+        return next(new AppError("This variant is already in the wishlist", 400));
+      wishlist.items[productIndex].variants.push({ variantSku });
+      await wishlist.save();
+    }
+  }
+
+  sendResponse(res, wishlist);
+});
+
+const removeItemFromWishlist = catchAsync(async (req, res, next) => {
+  const { productId, variantSku } = req.body;
+  const wishlist = await Wishlist.findOne({ user: req.user._id });
+
+  if (!wishlist) {
+    return next(new AppError(`No wishlist found`, 404));
+  }
+
+  const productIndex = wishlist.items.findIndex((item) => item.product.equals(productId));
+  if (productIndex === -1) {
+    return next(new AppError("Product is not in your wishlist", 400));
+  }
+
+  const variantIndex = wishlist.items[productIndex].variants.findIndex(
+    (variant) => variant.variantSku === variantSku
+  );
+  if (variantIndex === -1)
+    return next(new AppError("Prouct Variant is not in your wishlist", 400));
+
+  wishlist.items[productIndex].variants = wishlist.items[productIndex].variants.filter(
+    (variant) => variant.variantSku !== variantSku
+  );
+  await wishlist.save();
+
+  sendResponse(res, wishlist);
+});
+
+const getWishlist = catchAsync(async (req, res, next) => {
+  const wishlist = await Wishlist.findOne({ user: req.user }).populate("items.product");
+  if (!wishlist || wishlist.items.length === 0)
+    return next(new AppError("No items found in wishlist", 404));
+
+  wishlist.items.map((item) => {
+    const product = item.product;
+    product.variants = product.variants.filter((variant) =>
+      item.variants.some((wishlistVariant) => wishlistVariant.variantSku === variant.sku)
+    );
+  });
+
+  sendResponse(res, wishlist.items);
+});
+
+export {
+  addItemToWishlist,
+  removeItemFromWishlist,
+  getWishlist,
+  validateWishlistRequest,
+};
+
+
+import mongoose from "mongoose";
+
+const wishlistSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true,
+  },
+  items: [
+    {
+      product: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Product",
+        required: true,
+      },
+      variants: [
+        {
+          variantSku: {
+            type: String,
+            required: true,
+          },
+          addedAt: {
+            type: Date,
+            default: Date.now,
+          },
+        },
+      ],
+    },
+  ],
+});
+
+const Wishlist = mongoose.model("Wishlist", wishlistSchema);
+export default Wishlist;
+
+
+import express from "express";
+import {
+  addItemToWishlist,
+  getWishlist,
+  removeItemFromWishlist,
+  validateWishlistRequest,
+} from "../controllers/wishlist.controller.js";
+import { protect } from "../controllers/auth.controller.js";
+
+const router = express.Router();
+router.route("/").get(protect, getWishlist);
+router.route("/add").patch(protect, validateWishlistRequest, addItemToWishlist);
+router.route("/remove").patch(protect, validateWishlistRequest, removeItemFromWishlist);
+
+export default router;
+
+----------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+----------------------------------------------------------------------------------------------------
+==> assets 
+----------------------------------------------------------------------------------------------------
+-> city
+
+[
+  { "city": "Ahmadabad", "state": "Gujarat", "country": "India" },
+  { "city": "Amreli", "state": "Gujarat", "country": "India" },
+  { "city": "Anand", "state": "Gujarat", "country": "India" },
+  { "city": "Aravalli", "state": "Gujarat", "country": "India" },
+  { "city": "Banaskantha", "state": "Gujarat", "country": "India" },
+  { "city": "Bharuch", "state": "Gujarat", "country": "India" },
+  { "city": "Bhavnagar", "state": "Gujarat", "country": "India" },
+  { "city": "Botad", "state": "Gujarat", "country": "India" },
+  { "city": "Chhota Udepur", "state": "Gujarat", "country": "India" },
+  { "city": "Dahod", "state": "Gujarat", "country": "India" },
+  { "city": "Dangs", "state": "Gujarat", "country": "India" },
+  { "city": "Devbhumi Dwarka", "state": "Gujarat", "country": "India" },
+  { "city": "Gandhinagar", "state": "Gujarat", "country": "India" },
+  { "city": "Gir Somnath", "state": "Gujarat", "country": "India" },
+  { "city": "Jamnagar", "state": "Gujarat", "country": "India" },
+  { "city": "Junagadh", "state": "Gujarat", "country": "India" },
+  { "city": "Kachchh", "state": "Gujarat", "country": "India" },
+  { "city": "Kheda", "state": "Gujarat", "country": "India" },
+  { "city": "Mahesana", "state": "Gujarat", "country": "India" },
+  { "city": "Mahisagar", "state": "Gujarat", "country": "India" },
+  { "city": "Morbi", "state": "Gujarat", "country": "India" },
+  { "city": "Narmada", "state": "Gujarat", "country": "India" },
+  { "city": "Navsari", "state": "Gujarat", "country": "India" },
+  { "city": "Panchmahals", "state": "Gujarat", "country": "India" },
+  { "city": "Patan", "state": "Gujarat", "country": "India" },
+  { "city": "Porbandar", "state": "Gujarat", "country": "India" },
+  { "city": "Rajkot", "state": "Gujarat", "country": "India" },
+  { "city": "Sabarkantha", "state": "Gujarat", "country": "India" },
+  { "city": "Surat", "state": "Gujarat", "country": "India" },
+  { "city": "Surendranagar", "state": "Gujarat", "country": "India" },
+  { "city": "Tapi", "state": "Gujarat", "country": "India" },
+  { "city": "Vadodara", "state": "Gujarat", "country": "India" },
+  { "city": "Valsad", "state": "Gujarat", "country": "India" }
+]
+
+----------------------------------------------------------------------------------------------------
+-> delivery station manager
+
+[
+  {
+    "name": "Smit Prajapati",
+    "email": "smit2002@gmail.com",
+    "password": "Smit2002@",
+    "passwordConfirm": "Smit2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456788,
+    "deliveryStation": "66f7cec06f13c48c436157eb"
+  },
+  {
+    "name": "Aryan Verma",
+    "email": "aryan2002@gmail.com",
+    "password": "Aryan2002@",
+    "passwordConfirm": "Aryan2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456781,
+    "deliveryStation": "66f7ced96f13c48c436157f3"
+  },
+  {
+    "name": "Malay Chaudhary",
+    "email": "malay2002@gmail.com",
+    "password": "Malay2002@",
+    "passwordConfirm": "Malay2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456786,
+    "deliveryStation": "66f7cecf6f13c48c436157ef"
+  },
+  {
+    "name": "Jainish Patel",
+    "email": "jainish2002@gmail.com",
+    "password": "Jainish2002@",
+    "passwordConfirm": "Jainish2002@",
+    "dateOfBirth": "2002-11-03",
+    "gender": "Male",
+    "phone": 9223456786,
+    "deliveryStation": "66f7cee16f13c48c436157f7"
+  },
+  {
+    "name": "Kushal Patel",
+    "email": "kushal2002@gmail.com",
+    "password": "Kushal2002@",
+    "passwordConfirm": "Kushal2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 8223456786,
+    "deliveryStation": "66f7cee96f13c48c436157fb"
+  },
+  {
+    "name": "Henry Cavill",
+    "email": "henry2002@gmail.com",
+    "password": "Henry2002@",
+    "passwordConfirm": "Henry2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9755456786,
+    "deliveryStation": "66f7cef56f13c48c436157ff"
+  },
+  {
+    "name": "Tom Cruise",
+    "email": "tomc2002@gmail.com",
+    "password": "Tom2002@",
+    "passwordConfirm": "Tom2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9755456186,
+    "deliveryStation": "66f7cefe6f13c48c43615803"
+  },
+  {
+    "name": "Dwayne Johnson",
+    "email": "dwayne2002@gmail.com",
+    "password": "Dwayne2002@",
+    "passwordConfirm": "Dwayne2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9755456116,
+    "deliveryStation": "66f7cf086f13c48c43615807"
+  },
+  {
+    "name": "Ryan Ranolds",
+    "email": "ryan2002@gmail.com",
+    "password": "Ryan2002@",
+    "passwordConfirm": "Ryan2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9225456116,
+    "deliveryStation": "66f7cf116f13c48c4361580b"
+  }
+]
+
+----------------------------------------------------------------------------------------------------
+-> delivery station
+
+[
+  {
+    "name": "DS_AMD01",
+    "address": {
+      "street": "Between, Girish Coldrink and Xaviers Corner, Chimanlal Girdharlal Rd, Vasant Vihar, Navrangpura",
+      "city": "66f6efb1249889da1851b600",
+      "postalCode": "380009"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.4806364, 23.0330763]
+    }
+  },
+  {
+    "name": "DS_RJK01",
+    "address": {
+      "street": "Sadar Bazar Main Road Opposite Bileshwar Mahadev Temple, Sadar Bazar Main Road",
+      "city": "66f6efb1249889da1851b600",
+      "postalCode": "360001"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [70.7435976, 22.2902068]
+    }
+  },
+  {
+    "name": "DS_SRT01",
+    "address": {
+      "street": "Atlantis Square, Fire Station, opp. Vesu, Vesu",
+      "city": "66f6efb1249889da1851b600",
+      "postalCode": "395007"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.73891, 21.1674628]
+    }
+  },
+
+  {
+    "name": "DS_AMR01",
+    "address": {
+      "street": "Old APMC, Market Yard Rd, Amreli Irrigation Division, D.L.B. Society",
+      "city": "66f6efb1249889da1851b601",
+      "postalCode": "365601"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [68.7804303, 21.6025174]
+    }
+  },
+  {
+    "name": "DS_AND01",
+    "address": {
+      "street": "Hotel Blueivy, 80 Feet Rd, opposite Patcon House, Rajiv Nagar, Patel Chokdi, Vivekanand Wadi",
+      "city": "66f6efb1249889da1851b602",
+      "postalCode": "388001"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.9273606, 22.5615372]
+    }
+  },
+  {
+    "name": "DS_ARV01",
+    "address": {
+      "street": "Dholivav, Polo main road, Vijayanagar, Abhapur",
+      "city": "66f6efb1249889da1851b603",
+      "postalCode": "383460"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.9849923, 23.7241714]
+    }
+  },
+  {
+    "name": "DS_BNK01",
+    "address": {
+      "street": "TGR (The Grand Radiance), Sheetal-9 complex, opp. Abu Highway, Bihari Bag, Palanpur",
+      "city": "66f6efb1249889da1851b604",
+      "postalCode": "385001"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.1654652, 24.2227276]
+    }
+  },
+  {
+    "name": "DS_BRC01",
+    "address": {
+      "street": "R S No, Over Bridge, 79 A, ABC Chokdi, near Nandelav Road, Bholav",
+      "city": "66f6efb1249889da1851b605",
+      "postalCode": "392001"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.9682183, 21.7409501]
+    }
+  },
+  {
+    "name": "DS_BVN01",
+    "address": {
+      "street": "near Sundarvas Bungalow, Kaliyabid",
+      "city": "66f6efb1249889da1851b606",
+      "postalCode": "364002"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.0779565, 21.7358881]
+    }
+  }
+]
+
+----------------------------------------------------------------------------------------------------
+-> product
+
+[
+  {
+    "name": "VINCENT CHASE EYEWEAR By Lenskart | Full Rim Round | Polarized and 100% UV Protected | Men & Women | Medium | VC S13112",
+    "description": "Stylish eyewear from Vincent Chase, featuring a full rim round frame, polarized and 100% UV protection for both men and women.",
+    "additionalInformation": [
+      { "name": "Frame Material", "value": "Acetate" },
+      { "name": "Lens Material", "value": "Polycarbonate" },
+      { "name": "Lens Type", "value": "Polarized" }
+    ],
+    "category": "66fac19b312891f1fa00a941",
+    "brand": "Vincent Chase",
+    "maxPurchaseQuantity": 3,
+    "tags": ["eyewear", "polarized", "unisex"],
+    "variants": [
+      {
+        "attributes": [
+          { "name": "Color", "value": "Black" },
+          { "name": "Size", "value": "Medium" }
+        ],
+        "price": 1999,
+        "discount": 10,
+        "images": ["https://example.com/image1.jpg", "https://example.com/image2.jpg"]
+      },
+      {
+        "attributes": [
+          { "name": "Color", "value": "Brown" },
+          { "name": "Size", "value": "Medium" }
+        ],
+        "price": 2099,
+        "discount": 15,
+        "images": ["https://example.com/image3.jpg", "https://example.com/image4.jpg"]
+      }
+    ],
+    "weight": 0.2,
+    "dimensions": {
+      "length": 15,
+      "height": 4,
+      "width": 5
+    },
+    "isFeatured": true
+  },
+
+  {
+    "name": "iphone 15 plus",
+    "description": "brand new iphone 15 plus",
+    "additionalInformation": [
+      { "name": "RAM", "value": "6gb" },
+      { "name": "Storage", "value": "128gb" },
+      { "name": "color", "value": "matt black" }
+    ],
+    "category": "66fac19b312891f1fa00a941",
+    "brand": "Vincent Chase",
+    "maxPurchaseQuantity": 3,
+    "tags": ["eyewear", "polarized", "unisex"],
+    "variants": [
+      {
+        "attributes": [
+          { "name": "RAM", "value": "6gb" },
+          { "name": "Storage", "value": "128gb" },
+          { "name": "color", "value": "matt black" }
+        ],
+        "price": 1999,
+        "discount": 10,
+        "images": ["https://example.com/image1.jpg", "https://example.com/image2.jpg"]
+      },
+      {
+        "attributes": [
+          { "name": "RAM", "value": "8gb" },
+          { "name": "Storage", "value": "256gb" },
+          { "name": "color", "value": "olive green" }
+        ],
+        "price": 73000,
+        "discount": 15,
+        "images": ["https://example.com/image3.jpg", "https://example.com/image4.jpg"]
+      }
+    ],
+    "weight": 0.2,
+    "dimensions": {
+      "length": 15,
+      "height": 4,
+      "width": 5
+    },
+    "isFeatured": true
+  }
+]
+
+----------------------------------------------------------------------------------------------------
+-> product category
+
+[
+  {
+    "name": "Electronics",
+    "description": "This is electronics category."
+  },
+  {
+    "name": "Laptops",
+    "parentCategory": "66fa4fa31698d21207291f23"
+  },
+  {
+    "name": "Gaming Laptops",
+    "parentCategory": "66fa4ffa1698d21207291f30"
+  },
+  {
+    "name": "Dell Laptops",
+    "parentCategory": "66fa4ffa1698d21207291f30"
+  }
+]
+
+----------------------------------------------------------------------------------------------------
+-> vehicle
+
+[
+  {
+    "vehicleNumber": "GJ02EB5330",
+    "type": "Small-Truck",
+    "warehouse": "66f7c7dda469bd2fc645f7b8"
+  },
+  {
+    "vehicleNumber": "GJ02EB5331",
+    "type": "Box-Truck",
+    "warehouse": "66f7c7dda469bd2fc645f7b8"
+  },
+  {
+    "vehicleNumber": "GJ02EB5332",
+    "type": "Van",
+    "warehouse": "66f7c7dda469bd2fc645f7b8"
+  },
+  {
+    "vehicleNumber": "GJ02EB5333",
+    "type": "Small-Truck",
+    "warehouse": "66f7c7dda469bd2fc645f7b8"
+  },
+  {
+    "vehicleNumber": "GJ02EB5334",
+    "type": "Small-Truck",
+    "warehouse": "66f7c7eda469bd2fc645f7bc"
+  },
+  {
+    "vehicleNumber": "GJ02EB5335",
+    "type": "Van",
+    "warehouse": "66f7c7eda469bd2fc645f7bc"
+  },
+  {
+    "vehicleNumber": "GJ02EB5336",
+    "type": "Box-Truck",
+    "warehouse": "66f7c7eda469bd2fc645f7bc"
+  },
+  {
+    "vehicleNumber": "GJ02EB5337",
+    "type": "Box-Truck",
+    "warehouse": "66f7c7f8a469bd2fc645f7c0"
+  },
+  {
+    "vehicleNumber": "GJ02EB5338",
+    "type": "Small-Truck",
+    "warehouse": "66f7c7f8a469bd2fc645f7c0"
+  },
+  {
+    "vehicleNumber": "GJ02EB5339",
+    "type": "Small-Truck",
+    "warehouse": "66f7c7f8a469bd2fc645f7c0"
+  },
+  {
+    "vehicleNumber": "GJ02EB5340",
+    "type": "Van",
+    "warehouse": "66f7c7f8a469bd2fc645f7c0"
+  }
+]
+
+----------------------------------------------------------------------------------------------------
+-> warehouse address
+
+[
+  {
+    "street": "Manek Chowk Rd, Old City, Mandvi ni Pol, Khadia",
+    "city": "66f6efb1249889da1851b600",
+    "postalCode": "380001"
+  },
+  {
+    "street": "Swaminarayan Chowk, Krishna Nagar, Sardar Nagar",
+    "city": "66f6efb1249889da1851b61a",
+    "postalCode": "360004"
+  },
+  {
+    "street": "G3, SILVASSA SHOPPING CENTER, Mota Varachha Main Rd, Mota Varachha",
+    "city": "66f6efb1249889da1851b61c",
+    "postalCode": "394101"
+  }
+]
+
+----------------------------------------------------------------------------------------------------
+-> warhouse driver
+
+{
+  "name": "Bruce Wayne",
+  "email": "bruce2002@gmail.com",
+  "password": "Bruce2002@",
+  "passwordConfirm": "Bruce2002@",
+  "dateOfBirth": "2001-09-12",
+  "gender": "Male",
+  "phone": 9123456212,
+  "warehouse": "66f7c7f8a469bd2fc645f7c0"
+}
+
+----------------------------------------------------------------------------------------------------
+-> warehouse manager
+
+[
+  {
+    "name": "Sagar Patel",
+    "email": "sagar2002@gmail.com",
+    "password": "Sagar2002@",
+    "passwordConfirm": "Sagar2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456789,
+    "warehouse": "66f7c7f8a469bd2fc645f7c0"
+  },
+  {
+    "name": "Kalpit Patel",
+    "email": "kalpit2002@gmail.com",
+    "password": "Kalpit2002@",
+    "passwordConfirm": "Kalpit2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456787,
+    "warehouse": "66f7c7dda469bd2fc645f7b8"
+  },
+  {
+    "name": "Devid Patel",
+    "email": "devid2002@gmail.com",
+    "password": "Devid2002@",
+    "passwordConfirm": "Devid2002@",
+    "dateOfBirth": "2001-09-12",
+    "gender": "Male",
+    "phone": 9123456783,
+    "warehouse": "66f7c7eda469bd2fc645f7bc"
+  }
+]
+
+----------------------------------------------------------------------------------------------------
+-> warehouse 
+
+[
+  {
+    "name": "W_AMD01",
+    "address": {
+      "street": "Manek Chowk Rd, Old City, Mandvi ni Pol, Khadia",
+      "city": "66f6efb1249889da1851b600",
+      "postalCode": "380001"
+    },
+    "transportCities": [
+      "66f6efb1249889da1851b600",
+      "66f6efb1249889da1851b603",
+      "66f6efb1249889da1851b604",
+      "66f6efb1249889da1851b60c",
+      "66f6efb1249889da1851b610",
+      "66f6efb1249889da1851b611",
+      "66f6efb1249889da1851b613",
+      "66f6efb1249889da1851b612",
+      "66f6efb1249889da1851b618",
+      "66f6efb1249889da1851b61b"
+    ],
+    "location": {
+      "type": "Point",
+      "coordinates": [72.5853344, 23.0231936]
+    }
+  },
+  {
+    "name": "W_RJK01",
+    "address": {
+      "street": "Swaminarayan Chowk, Krishna Nagar, Sardar Nagar",
+      "city": "66f6efb1249889da1851b61a",
+      "postalCode": "360004"
+    },
+    "transportCities": [
+      "66f6efb1249889da1851b61a",
+      "66f6efb1249889da1851b601",
+      "66f6efb1249889da1851b606",
+      "66f6efb1249889da1851b607",
+      "66f6efb1249889da1851b60b",
+      "66f6efb1249889da1851b60d",
+      "66f6efb1249889da1851b60e",
+      "66f6efb1249889da1851b60f",
+      "66f6efb1249889da1851b614",
+      "66f6efb1249889da1851b617",
+      "66f6efb1249889da1851b619",
+      "66f6efb1249889da1851b61d"
+    ],
+    "location": {
+      "type": "Point",
+      "coordinates": [70.790697, 22.2682139]
+    }
+  },
+  {
+    "name": "W_SRT01",
+    "address": {
+      "street": "behind kurusherta samshan ghat, Jahangir Pura",
+      "city": "66f6efb1249889da1851b61c",
+      "postalCode": "395009"
+    },
+    "transportCities": [
+      "66f6efb1249889da1851b61c",
+      "66f6efb1249889da1851b602",
+      "66f6efb1249889da1851b605",
+      "66f6efb1249889da1851b608",
+      "66f6efb1249889da1851b609",
+      "66f6efb1249889da1851b60a",
+      "66f6efb1249889da1851b615",
+      "66f6efb1249889da1851b616",
+      "66f6efb1249889da1851b61e",
+      "66f6efb1249889da1851b61f",
+      "66f6efb1249889da1851b620"
+    ],
+    "location": {
+      "type": "Point",
+      "coordinates": [72.7177256, 21.2429822]
+    }
+  }
+]
+
+----------------------------------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+----------------------------------------------------------------------------------------------------
+==> utils
+----------------------------------------------------------------------------------------------------
+-> apiFeatures
+
+class APIFeatures {
+  constructor(query, queryString) {
+    this.query = query;
+    this.queryString = queryString;
+  }
+
+  filter() {
+    let queryObj = { ...this.queryString };
+    const excludeFields = ["sort", "page", "limit", "fields"];
+    excludeFields.map((el) => delete queryObj[el]);
+
+    let queryStr = JSON.stringify(queryObj);
+    queryStr = queryStr.replace(/\b(gt|gte|lt|lte)\b/g, (match) => `$${match}`);
+    this.query = this.query.find(JSON.parse(queryStr));
+
+    return this;
+  }
+
+  sort() {
+    if (this.queryString.sort) {
+      const sortBy = this.queryString.sort.split(",").join(" ");
+      this.query = this.query.sort(sortBy);
+    } else {
+      this.query = this.query.sort("-createdAt");
+    }
+    return this;
+  }
+
+  limitFields() {
+    if (this.queryString.fields) {
+      const fields = this.queryString.fields.split(",").join(" ");
+      this.query = this.query.select(fields);
+    } else {
+      this.query = this.query.select("-__v");
+    }
+    return this;
+  }
+
+  paginate() {
+    const page = this.queryString.page * 1 || 1;
+    const limit = this.queryString.limit * 1 || 100;
+    const skip = (page - 1) * limit;
+    this.query = this.query.skip(skip).limit(limit);
+
+    return this;
+  }
+}
+
+export default APIFeatures;
+
+----------------------------------------------------------------------------------------------------
+
+-> AppError
+
+class AppError extends Error {
+  constructor(message, statusCode) {
+    super(message);
+
+    this.statusCode = statusCode;
+    this.status = `${statusCode}`.startsWith("4") ? "fail" : "error";
+    this.isOperational = true;
+
+    Error.captureStackTrace(this, constructor);
+  }
+}
+
+export default AppError;
+
+----------------------------------------------------------------------------------------------------
+-> catchAsync 
+const catchAsync = (fn) => {
+  return (req, res, next) => {
+    fn(req, res, next).catch(next);
+  };
+};
+export default catchAsync;
+
+
+----------------------------------------------------------------------------------------------------
+-> cloudinary
+
+import { v2 as cloudinary } from "cloudinary";
+import { config } from "dotenv";
+
+// Load environment variables from .env file
+config();
+
+// Configure Cloudinary with environment variables
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+export default cloudinary;
+
+----------------------------------------------------------------------------------------------------
+-=> helper
+
+import AppError from "./AppError.js";
+
+const filterObject = (obj, allowedFields) => {
+  if (obj && Object.keys(obj).length > 0) {
+    const filterdObject = {};
+    Object.keys(obj).forEach((key) => {
+      if (allowedFields.includes(key)) {
+        filterdObject[key] = obj[key];
+      }
+    });
+    return filterdObject;
+  } else {
+    throw new AppError(
+      `Request body cannot be empty. Please provide some {field : value} to update.`,
+      400
+    );
+  }
+};
+
+const capitalizeFirstLetter = (str) => {
+  return str
+    .split(" ")
+    .map((el) => el.charAt(0).toUpperCase() + el.slice(1))
+    .join(" ");
+};
+
+const removeSpace = (str) => {
+  return str.replace(/\s+/g, " ").trim();
+};
+
+export { filterObject, capitalizeFirstLetter, removeSpace };
+
+----------------------------------------------------------------------------------------------------
+=> sendEmail
+\
+
+import nodemailer from "nodemailer";
+import User from "../models/user.model.js";
+import AppError from "./AppError.js";
+
+// Configure nodemailer transporter
+
+const transporter = nodemailer.createTransport({
+  host: "smtp.ethereal.email",
+  port: 587,
+  auth: {
+    user: "ludwig.dibbert@ethereal.email",
+    pass: "efWmv3c4NbtGVma1Sd",
+    // user : process.env.EMAIL_USER,
+    // pass : process.env.EMAIL_PASS
+  },
+});
+
+export async function sendEmail(userId, otp) {
+  let testAccount = await nodemailer.createTestAccount();
+  try {
+    const user = await User.findById(userId).select("email name role");
+    if (!user) {
+      throw new Error("Delivery station manager not found", 404);
+    }
+
+    // Define email options
+    const mailOptions = {
+      from: "Nisarg Patel",
+      to: user.email,
+      subject: "OTP for Delivery Confirmation",
+      text: `Hello ${user.name},\n\nYour OTP for confirming delivery to the station is: ${otp} (Only Valid for 10 minutes.) \nPlease use this OTP to verify the delivery.\n\nThank you.`,
+    };
+
+    // Send email
+    const info = await transporter.sendMail(mailOptions);
+    return info;
+  } catch (error) {
+    throw new Error(error, 500);
+  }
+}
+
+----------------------------------------------------------------------------------------------------
+-> .env 
+
+PORT=8000
+HOST=127.0.0.1
+DATABASE_CONNECTION_LOCAL=mongodb://localhost:27017/LMS
+
+JWT_SECRET_KEY=my-secret-key-0234
+JWT_EXPIRES_IN=90d
+
+CLOUDINARY_CLOUD_NAME=drtbueipf
+CLOUDINARY_API_KEY=358663862986994
+CLOUDINARY_API_SECRET=ebP9onw4YQHKpL3lcCihcUcdz90
+
+EMAIL_USER=ludwig.dibbert@ethereal.email
+EMAIL_PASS=efWmv3c4NbtGVma1Sd
+
+CLOUDINARY_CLOUD_NAME=drtbueipf
+CLOUDINARY_API_KEY=358663862986994
+CLOUDINARY_API_SECRET=ebP9onw4YQHKpL3lcCihcUcdz90
+----------------------------------------------------------------------------------------------------
+-> app.js
+
+import express from "express";
+import { config } from "dotenv";
+import globalErrorHandler from "./controllers/error.controller.js";
+import authRouter from "./routes/auth.route.js";
+import cityRouter from "./routes/city.route.js";
+import addressRouter from "./routes/address.route.js";
+import warehouseRouter from "./routes/warehouse.route.js";
+import deliveryStationRouter from "./routes/deliveryStation.route.js";
+import userRouter from "./routes/user.route.js";
+import vehicleRouter from "./routes/vehicle.route.js";
+import productCategoryRouter from "./routes/productCategory.route.js";
+import productRouter from "./routes/product.route.js";
+import wishlistRouter from "./routes/wishlist.route.js";
+import cartRouter from "./routes/cart.route.js";
+import orderRouter from "./routes/order.route.js";
+
+// Environment file configuration
+// config({ path: "./config.env" });
+config();
+
+// Express application
+const app = express();
+
+// Middlewares
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Route middlewares
+app.use("/auth", authRouter);
+app.use("/city", cityRouter);
+app.use("/address", addressRouter);
+app.use("/warehouse", warehouseRouter);
+app.use("/deliveryStation", deliveryStationRouter);
+app.use("/user", userRouter);
+app.use("/vehicle", vehicleRouter);
+app.use("/productCategory", productCategoryRouter);
+app.use("/product", productRouter);
+app.use("/wishlist", wishlistRouter);
+app.use("/cart", cartRouter);
+app.use("/order", orderRouter);
+
+// Unhandled route
+app.all("*", (req, res, next) => {
+  res.status(404).json({
+    status: "failed",
+    message: `No such route found on ${req.originalUrl}.`,
+  });
+});
+
+// Global error handling middleware
+app.use(globalErrorHandler);
+
+export default app;
+
+
+----------------------------------------------------------------------------------------------------
+-? server.js
+
+import mongoose from "mongoose";
+import app from "./app.js";
+
+// UNHANDLED EXCEPTION
+process.on("uncaughtException", (err) => {
+  console.log("UNHANDLED EXCEPTION 💥💥", err);
+  console.log("Shutting down the server...");
+  process.exit(1);
+});
+
+// Database connection
+mongoose.connect(process.env.DATABASE_CONNECTION_LOCAL).then(() => {
+  console.log("Successfully connected to the database.");
+});
+
+// Server
+const server = app.listen(process.env.PORT, process.env.HOST, () => {
+  console.log(`Application is listening on port ${process.env.PORT}...`);
+});
+
+// UNHANDLED REJECTION
+process.on("unhandledRejection", (err) => {
+  console.log("UNHANDLED REJECTION 💥💥", err);
+  console.log("Shutting down the server...");
+  server.close(() => {
+    process.exit(1);
+  });
+});
+
+----------------------------------------------------------------------------------------------------
+{
+  "name": "server",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "cross-env NODE_ENV=development nodemon server.js",
+    "start:prod": "cross-env NODE_ENV=production nodemon server.js"
+  },
+  "type": "module",
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "cloudinary": "^2.5.1",
+    "cross-env": "^7.0.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.6.3",
+    "multer": "^1.4.5-lts.1",
+    "multer-storage-cloudinary": "^4.0.0",
+    "nodemailer": "^6.9.16",
+    "nodemon": "^3.1.7",
+    "slugify": "^1.6.6",
+    "validator": "^13.12.0"
+  }
+}
+
+----------------------------------------------------------------------------------------------------
+
+
+
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+-> ==> Backend Flow
+=> 1. Logistics
+    -> cities with pincodes 
+    -> warehouses -> warehouse (managers + drivers + vehicles) -> products 
+    -> delivery station -> delivery station (managers + drivers) 
+=> 2. eCommerce
+    -> view products and product categories -> view product details -> view products under category
+    -> wishlist
+    -> cart
+    -> check pincode for delivery 
+    -> account section 
+        -> Address
+        -> update user details (common details like name, email + password)
+        -> orders 
+=> 3. Logistics
+    -> warehoue manager -> see orders -> assign them to driver with vehicles
+    -> warehouse driver -> see assigned orders -> deliver to multiple delivery stations 
+    -> delivery station manager -> see orders -> assign to driver
+    -> delivery station driver -> deliver order to multiple users
+----------------------------------------------------------------------------------------------------
+
+=> steps
+-> create app.js and server.js
+-> create config.env
+-> create MVC architecture (models, controllers, routes, utils)
+-> error handling
+    -> global error handling middelware, appError, catchAsync
+    -> handle error outside of express application, unhandled routes
+
+==> Authentication 
+    -> signUp, login, protect, restrictTo
+
+==> Factory Functions
+    -> createOne, createMany, getOne, getMany, updateOne
+    -> search, sort, filter, pagination, infinite scroll
+
+----------------------------------------------------------------------------------------------------
+
+==> Admin
+1. City
+    -> createCity, createCities, getCities, getCity, updateCity
+2. Address
+    -> createAddress, getAddresses, getAddress, updateAddress, updateDefaultAddress
+3. Warehouse
+    -> createWarehouse, getWarehouses, getWarehouse, warehouseExists
+    -> updateWarehouse, updateTransportCities, updateWarehouseAddress
+4. Delivery Station
+    -> createDeliveryStation, getDeliveryStations, getDeliveryStation, 
+    -> updateDeliveryStation, updateDeliveryStationAddress
+5. User
+    -> checkSingleUser, checkUserExists, createUser, getUsers, getUser, updateUser
+6. Vehicle
+    -> createVehicle, getVehicles, getVehicle, updateVehicle
+7. Product Category
+    -> createProductCategory, getProductCategories, getProductCategory, updateProductCategory
+8. Product
+    -> createProduct, getProducts, getProduct, updateProduct, updateProduct, updateVariant 
+    -> image upload
+
+----------------------------------------------------------------------------------------------------
+
+==> Warehouse Manager
+1. Product
+    -> updateProductStock
+    -> addDriver
+
+----------------------------------------------------------------------------------------------------
+
+1. wishlist
+    -> addItemToWishlist, removeItemFromWishlist, getWishlist, validateWishlistRequest
+2. Cart 
+    -> validateCartRequest, addItemToCart, removeItemFromCart, updateCart, getCart 
+3. Address
+    -> adduserAddress, removeUserAddress, getUserAddress, updateDefaultAddress
+4. pincode
+    -> checkProductAvailability
+----------------------------------------------------------------------------------------------------
+
+
+==> Automated
+    -> updateVehicleAvailability, updateDriverAvailability
+==> product reviews 
+-> bug - isActive
+
+==> common Functions
+    -> update me, update password, forgot password
+----------------------------------------------------------------------------------------------------

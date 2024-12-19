@@ -1,0 +1,111 @@
+[
+  {
+    "name": "DS_AMD01",
+    "address": {
+      "street": "Between, Girish Coldrink and Xaviers Corner, Chimanlal Girdharlal Rd, Vasant Vihar, Navrangpura",
+      "city": "66f6efb1249889da1851b600",
+      "postalCode": "380009"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.4806364, 23.0330763]
+    }
+  },
+  {
+    "name": "DS_RJK01",
+    "address": {
+      "street": "Sadar Bazar Main Road Opposite Bileshwar Mahadev Temple, Sadar Bazar Main Road",
+      "city": "66f6efb1249889da1851b600",
+      "postalCode": "360001"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [70.7435976, 22.2902068]
+    }
+  },
+  {
+    "name": "DS_SRT01",
+    "address": {
+      "street": "Atlantis Square, Fire Station, opp. Vesu, Vesu",
+      "city": "66f6efb1249889da1851b600",
+      "postalCode": "395007"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.73891, 21.1674628]
+    }
+  },
+
+  {
+    "name": "DS_AMR01",
+    "address": {
+      "street": "Old APMC, Market Yard Rd, Amreli Irrigation Division, D.L.B. Society",
+      "city": "66f6efb1249889da1851b601",
+      "postalCode": "365601"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [68.7804303, 21.6025174]
+    }
+  },
+  {
+    "name": "DS_AND01",
+    "address": {
+      "street": "Hotel Blueivy, 80 Feet Rd, opposite Patcon House, Rajiv Nagar, Patel Chokdi, Vivekanand Wadi",
+      "city": "66f6efb1249889da1851b602",
+      "postalCode": "388001"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.9273606, 22.5615372]
+    }
+  },
+  {
+    "name": "DS_ARV01",
+    "address": {
+      "street": "Dholivav, Polo main road, Vijayanagar, Abhapur",
+      "city": "66f6efb1249889da1851b603",
+      "postalCode": "383460"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.9849923, 23.7241714]
+    }
+  },
+  {
+    "name": "DS_BNK01",
+    "address": {
+      "street": "TGR (The Grand Radiance), Sheetal-9 complex, opp. Abu Highway, Bihari Bag, Palanpur",
+      "city": "66f6efb1249889da1851b604",
+      "postalCode": "385001"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.1654652, 24.2227276]
+    }
+  },
+  {
+    "name": "DS_BRC01",
+    "address": {
+      "street": "R S No, Over Bridge, 79 A, ABC Chokdi, near Nandelav Road, Bholav",
+      "city": "66f6efb1249889da1851b605",
+      "postalCode": "392001"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.9682183, 21.7409501]
+    }
+  },
+  {
+    "name": "DS_BVN01",
+    "address": {
+      "street": "near Sundarvas Bungalow, Kaliyabid",
+      "city": "66f6efb1249889da1851b606",
+      "postalCode": "364002"
+    },
+    "location": {
+      "type": "Point",
+      "coordinates": [72.0779565, 21.7358881]
+    }
+  }
+]

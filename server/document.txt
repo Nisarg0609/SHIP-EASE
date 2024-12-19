@@ -1,0 +1,86 @@
+==> Backend Flow
+=> 1. Logistics
+    -> cities with pincodes 
+    -> warehouses -> warehouse (managers + drivers + vehicles) -> products 
+    -> delivery station -> delivery station (managers + drivers) 
+=> 2. eCommerce
+    -> view products and product categories -> view product details -> view products under category
+    -> wishlist
+    -> cart
+    -> check pincode for delivery 
+    -> account section 
+        -> Address
+        -> update user details (common details like name, email + password)
+        -> orders 
+=> 3. Logistics
+    -> warehoue manager -> see orders -> assign them to driver with vehicles
+    -> warehouse driver -> see assigned orders -> deliver to multiple delivery stations 
+    -> delivery station manager -> see orders -> assign to driver
+    -> delivery station driver -> deliver order to multiple users
+----------------------------------------------------------------------------------------------------
+
+=> steps
+-> create app.js and server.js
+-> create config.env
+-> create MVC architecture (models, controllers, routes, utils)
+-> error handling
+    -> global error handling middelware, appError, catchAsync
+    -> handle error outside of express application, unhandled routes
+
+==> Authentication 
+    -> signUp, login, protect, restrictTo
+
+==> Factory Functions
+    -> createOne, createMany, getOne, getMany, updateOne
+    -> search, sort, filter, pagination, infinite scroll
+
+----------------------------------------------------------------------------------------------------
+
+==> Admin
+1. City
+    -> createCity, createCities, getCities, getCity, updateCity
+2. Address
+    -> createAddress, getAddresses, getAddress, updateAddress, updateDefaultAddress
+3. Warehouse
+    -> createWarehouse, getWarehouses, getWarehouse, warehouseExists
+    -> updateWarehouse, updateTransportCities, updateWarehouseAddress
+4. Delivery Station
+    -> createDeliveryStation, getDeliveryStations, getDeliveryStation, 
+    -> updateDeliveryStation, updateDeliveryStationAddress
+5. User
+    -> checkSingleUser, checkUserExists, createUser, getUsers, getUser, updateUser
+6. Vehicle
+    -> createVehicle, getVehicles, getVehicle, updateVehicle
+7. Product Category
+    -> createProductCategory, getProductCategories, getProductCategory, updateProductCategory
+8. Product
+    -> createProduct, getProducts, getProduct, updateProduct, updateProduct, updateVariant 
+    -> image upload
+
+----------------------------------------------------------------------------------------------------
+
+==> Warehouse Manager
+1. Product
+    -> updateProductStock
+    -> addDriver
+
+----------------------------------------------------------------------------------------------------
+
+1. wishlist
+    -> addItemToWishlist, removeItemFromWishlist, getWishlist, validateWishlistRequest
+2. Cart 
+    -> validateCartRequest, addItemToCart, removeItemFromCart, updateCart, getCart 
+3. Address
+    -> adduserAddress, removeUserAddress, getUserAddress, updateDefaultAddress
+4. pincode
+    -> checkProductAvailability
+----------------------------------------------------------------------------------------------------
+
+
+==> Automated
+    -> updateVehicleAvailability, updateDriverAvailability
+==> product reviews 
+-> bug - isActive
+
+==> common Functions
+    -> update me, update password, forgot password

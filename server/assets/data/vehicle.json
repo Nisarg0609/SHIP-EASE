@@ -1,0 +1,57 @@
+[
+  {
+    "vehicleNumber": "GJ02EB5330",
+    "type": "Small-Truck",
+    "warehouse": "66f7c7dda469bd2fc645f7b8"
+  },
+  {
+    "vehicleNumber": "GJ02EB5331",
+    "type": "Box-Truck",
+    "warehouse": "66f7c7dda469bd2fc645f7b8"
+  },
+  {
+    "vehicleNumber": "GJ02EB5332",
+    "type": "Van",
+    "warehouse": "66f7c7dda469bd2fc645f7b8"
+  },
+  {
+    "vehicleNumber": "GJ02EB5333",
+    "type": "Small-Truck",
+    "warehouse": "66f7c7dda469bd2fc645f7b8"
+  },
+  {
+    "vehicleNumber": "GJ02EB5334",
+    "type": "Small-Truck",
+    "warehouse": "66f7c7eda469bd2fc645f7bc"
+  },
+  {
+    "vehicleNumber": "GJ02EB5335",
+    "type": "Van",
+    "warehouse": "66f7c7eda469bd2fc645f7bc"
+  },
+  {
+    "vehicleNumber": "GJ02EB5336",
+    "type": "Box-Truck",
+    "warehouse": "66f7c7eda469bd2fc645f7bc"
+  },
+  {
+    "vehicleNumber": "GJ02EB5337",
+    "type": "Box-Truck",
+    "warehouse": "66f7c7f8a469bd2fc645f7c0"
+  },
+  {
+    "vehicleNumber": "GJ02EB5338",
+    "type": "Small-Truck",
+    "warehouse": "66f7c7f8a469bd2fc645f7c0"
+  },
+  {
+    "vehicleNumber": "GJ02EB5339",
+    "type": "Small-Truck",
+    "warehouse": "66f7c7f8a469bd2fc645f7c0"
+  },
+  {
+    "vehicleNumber": "GJ02EB5340",
+    "type": "Van",
+    "warehouse": "66f7c7f8a469bd2fc645f7c0"
+  }
+]

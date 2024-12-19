@@ -1,0 +1,85 @@
+[
+  {
+    "name": "VINCENT CHASE EYEWEAR By Lenskart | Full Rim Round | Polarized and 100% UV Protected | Men & Women | Medium | VC S13112",
+    "description": "Stylish eyewear from Vincent Chase, featuring a full rim round frame, polarized and 100% UV protection for both men and women.",
+    "additionalInformation": [
+      { "name": "Frame Material", "value": "Acetate" },
+      { "name": "Lens Material", "value": "Polycarbonate" },
+      { "name": "Lens Type", "value": "Polarized" }
+    ],
+    "category": "66fac19b312891f1fa00a941",
+    "brand": "Vincent Chase",
+    "maxPurchaseQuantity": 3,
+    "tags": ["eyewear", "polarized", "unisex"],
+    "variants": [
+      {
+        "attributes": [
+          { "name": "Color", "value": "Black" },
+          { "name": "Size", "value": "Medium" }
+        ],
+        "price": 1999,
+        "discount": 10,
+        "images": ["https://example.com/image1.jpg", "https://example.com/image2.jpg"]
+      },
+      {
+        "attributes": [
+          { "name": "Color", "value": "Brown" },
+          { "name": "Size", "value": "Medium" }
+        ],
+        "price": 2099,
+        "discount": 15,
+        "images": ["https://example.com/image3.jpg", "https://example.com/image4.jpg"]
+      }
+    ],
+    "weight": 0.2,
+    "dimensions": {
+      "length": 15,
+      "height": 4,
+      "width": 5
+    },
+    "isFeatured": true
+  },
+
+  {
+    "name": "iphone 15 plus",
+    "description": "brand new iphone 15 plus",
+    "additionalInformation": [
+      { "name": "RAM", "value": "6gb" },
+      { "name": "Storage", "value": "128gb" },
+      { "name": "color", "value": "matt black" }
+    ],
+    "category": "66fac19b312891f1fa00a941",
+    "brand": "Vincent Chase",
+    "maxPurchaseQuantity": 3,
+    "tags": ["eyewear", "polarized", "unisex"],
+    "variants": [
+      {
+        "attributes": [
+          { "name": "RAM", "value": "6gb" },
+          { "name": "Storage", "value": "128gb" },
+          { "name": "color", "value": "matt black" }
+        ],
+        "price": 1999,
+        "discount": 10,
+        "images": ["https://example.com/image1.jpg", "https://example.com/image2.jpg"]
+      },
+      {
+        "attributes": [
+          { "name": "RAM", "value": "8gb" },
+          { "name": "Storage", "value": "256gb" },
+          { "name": "color", "value": "olive green" }
+        ],
+        "price": 73000,
+        "discount": 15,
+        "images": ["https://example.com/image3.jpg", "https://example.com/image4.jpg"]
+      }
+    ],
+    "weight": 0.2,
+    "dimensions": {
+      "length": 15,
+      "height": 4,
+      "width": 5
+    },
+    "isFeatured": true
+  }
+]

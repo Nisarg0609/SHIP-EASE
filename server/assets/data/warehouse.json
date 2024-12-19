@@ -1,0 +1,77 @@
+[
+  {
+    "name": "W_AMD01",
+    "address": {
+      "street": "Manek Chowk Rd, Old City, Mandvi ni Pol, Khadia",
+      "city": "66f6efb1249889da1851b600",
+      "postalCode": "380001"
+    },
+    "transportCities": [
+      "66f6efb1249889da1851b600",
+      "66f6efb1249889da1851b603",
+      "66f6efb1249889da1851b604",
+      "66f6efb1249889da1851b60c",
+      "66f6efb1249889da1851b610",
+      "66f6efb1249889da1851b611",
+      "66f6efb1249889da1851b613",
+      "66f6efb1249889da1851b612",
+      "66f6efb1249889da1851b618",
+      "66f6efb1249889da1851b61b"
+    ],
+    "location": {
+      "type": "Point",
+      "coordinates": [72.5853344, 23.0231936]
+    }
+  },
+  {
+    "name": "W_RJK01",
+    "address": {
+      "street": "Swaminarayan Chowk, Krishna Nagar, Sardar Nagar",
+      "city": "66f6efb1249889da1851b61a",
+      "postalCode": "360004"
+    },
+    "transportCities": [
+      "66f6efb1249889da1851b61a",
+      "66f6efb1249889da1851b601",
+      "66f6efb1249889da1851b606",
+      "66f6efb1249889da1851b607",
+      "66f6efb1249889da1851b60b",
+      "66f6efb1249889da1851b60d",
+      "66f6efb1249889da1851b60e",
+      "66f6efb1249889da1851b60f",
+      "66f6efb1249889da1851b614",
+      "66f6efb1249889da1851b617",
+      "66f6efb1249889da1851b619",
+      "66f6efb1249889da1851b61d"
+    ],
+    "location": {
+      "type": "Point",
+      "coordinates": [70.790697, 22.2682139]
+    }
+  },
+  {
+    "name": "W_SRT01",
+    "address": {
+      "street": "behind kurusherta samshan ghat, Jahangir Pura",
+      "city": "66f6efb1249889da1851b61c",
+      "postalCode": "395009"
+    },
+    "transportCities": [
+      "66f6efb1249889da1851b61c",
+      "66f6efb1249889da1851b602",
+      "66f6efb1249889da1851b605",
+      "66f6efb1249889da1851b608",
+      "66f6efb1249889da1851b609",
+      "66f6efb1249889da1851b60a",
+      "66f6efb1249889da1851b615",
+      "66f6efb1249889da1851b616",
+      "66f6efb1249889da1851b61e",
+      "66f6efb1249889da1851b61f",
+      "66f6efb1249889da1851b620"
+    ],
+    "location": {
+      "type": "Point",
+      "coordinates": [72.7177256, 21.2429822]
+    }
+  }
+]

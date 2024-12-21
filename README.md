@@ -2,8 +2,8 @@
 
 **Ship Ease** is a comprehensive logistics management system that integrates eCommerce functionality with warehouse management, inventory management, and order fulfillment. This platform streamlines order processing and delivery through an optimized workflow, ensuring a smooth and secure delivery process from warehouse to customer.
 
-## 🖥️ Live Demo  
-👉 [**Ship Ease Live Demo**](https://ship-ease-02.netlify.app/)
+## Live Demo
+You can view the live demo of this project here: [Live Demo](https://ship-ease-02.netlify.app/) 
 
 ## ✨ Key Features  
 - **eCommerce Integration**: Customers can browse products across categories, including multi-variant products with price, discount, and stock information.  

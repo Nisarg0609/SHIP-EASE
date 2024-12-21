@@ -14,10 +14,12 @@
 - **Server-Side Sorting and Pagination**: Optimized data fetching with server-side sorting, filtering, and pagination for better performance.  
 - **Advanced Component Design**: Reusable components built using advanced patterns like compound components and custom hooks for enhanced user interaction and reusability.  
 
-## ⚙️ Tech Stack  
-- **Frontend**: React, React-Query, React-hook-form, Styled-Components 
-- **Backend**: Node.js, Express.js, MongoDB  
+## Tech Stack
+- **Frontend**: React
+- **Backend**: Node.js, Express.js
+- **Database**: MongoDB
 - **Authentication**: JWT, Role-Based Authentication  
+- **Libraries**: tanstack-query, react-hook-form, styled-components
 - **Storage**: Cloudinary (for images)  
-- **Email Notifications**: Nodemailer  
+- **Email Notifications**: Nodemailer 
 
